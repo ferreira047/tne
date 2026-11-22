@@ -426,6 +426,14 @@ function compareAnf(a, b) {
   return a.anf.localeCompare(b.anf, "pt-BR", { numeric: true }) || a.eveCrq.localeCompare(b.eveCrq, "pt-BR") || a.site.localeCompare(b.site, "pt-BR");
 }
 
+// Pivot por ANF: ordem numérica da ANF (11, 71, 79…), sem ANF no fim.
+const NO_ANF_LABEL = "(sem ANF)";
+function anfPivot(records) {
+  const pivot = buildPivot(records, (record) => record.anf || NO_ANF_LABEL);
+  pivot.rows.sort(([a], [b]) => (a === NO_ANF_LABEL) - (b === NO_ANF_LABEL) || a.localeCompare(b, "pt-BR", { numeric: true }));
+  return pivot;
+}
+
 function computeView() {
   const now = new Date();
   for (const record of dataset.records) {
@@ -448,6 +456,7 @@ function computeView() {
     reported,
     unassigned: scoped.filter((record) => !record.responsible),
     general: byResponsible(reported),
+    anf: anfPivot(reported),
     regional: regions.map((region) => ({ region, pivot: byResponsible(reported.filter((record) => record.region === region)) })),
     providerCauses: buildPivot(providers, (record) => record.cause || "(sem causa)"),
     providers: [...providers].sort(compareAnf)
@@ -744,6 +753,8 @@ function render(errorMessage = "") {
     return section;
   }));
   regionalWrap.className = `mb-7 grid grid-cols-1 gap-5 ${view.regional.length > 1 ? "xl:grid-cols-2" : ""}`;
+  document.getElementById("anf-title").textContent = `ANF × Aging · ${filters.region || "TNE geral"}`;
+  renderPivotTable(document.getElementById("anf-table"), view.anf, "ANF", "Nenhum site com estes filtros.");
   renderPivotTable(document.getElementById("provider-cause-table"), view.providerCauses, "Causa", "Nenhuma linha de provedor com estes filtros.");
   renderProviders(view);
   renderDetails(view);
@@ -985,6 +996,7 @@ function exportGenesisExcel() {
   for (const { region, pivot } of view.regional) {
     if (!filters.region) XLSX.utils.book_append_sheet(book, pivotSheet(pivot, "Responsável"), `Responsável ${region}`);
   }
+  XLSX.utils.book_append_sheet(book, pivotSheet(view.anf, "ANF"), "ANF");
   XLSX.utils.book_append_sheet(book, pivotSheet(view.providerCauses, "Causa"), "Provedores por causa");
   const providerSheet = XLSX.utils.aoa_to_sheet([
     ["ANF", "EVE/CRQ", "Site", "Aging", "Link"],
