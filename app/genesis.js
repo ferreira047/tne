@@ -426,9 +426,11 @@ function buildPivot(records, rowKey, labels = null) {
   return { columns: AGING_LABELS, rows: entries, total };
 }
 
-// Linhas pela ANF (mesma ordem da ANF × Aging) e colunas pelos responsáveis do report.
+// Linhas pela ANF (mesma ordem da ANF × Aging) e colunas pelos responsáveis do report,
+// com a TLP primeiro.
+const ANF_RESPONSIBLE_COLUMNS = ["TLP", ...REPORT_RESPONSIBLES.filter((responsible) => responsible !== "TLP")];
 function anfResponsiblePivot(records, anfRows) {
-  const columns = REPORT_RESPONSIBLES;
+  const columns = ANF_RESPONSIBLE_COLUMNS;
   const rows = new Map(anfRows.map(([anf]) => [anf, emptyCounts(columns)]));
   const total = emptyCounts(columns);
   for (const record of records) {
