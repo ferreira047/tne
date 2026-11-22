@@ -862,14 +862,27 @@ function readThemeColors(names) {
 }
 
 // Desenha as tabelas Responsável × Aging num canvas, como o "Copiar gráfico" do backlog.
-function renderPivotImage(view) {
+// Tabelas de cada imagem: "responsavel" (Copiar imagem) ou "anf" (Copiar parcial ANF).
+function imageTables(view, kind) {
+  const scope = filters.region || "TNE geral";
+  if (kind === "anf") {
+    return { subtitle: "Sites por ANF e aging", firstColumn: "ANF", tables: [{ title: `ANF × Aging · ${scope}`, pivot: view.anf }] };
+  }
+  return {
+    subtitle: "Sites por responsável e aging",
+    firstColumn: "RESPONSÁVEL",
+    tables: [
+      { title: `Responsável × Aging · ${scope}`, pivot: view.general },
+      ...(filters.region ? [] : view.regional.map(({ region, pivot }) => ({ title: `Responsável × Aging · ${region}`, pivot })))
+    ]
+  };
+}
+
+function renderPivotImage(view, kind = "responsavel") {
+  const { subtitle, firstColumn, tables } = imageTables(view, kind);
   const colors = readThemeColors(["surface", "sunken", "line", "line-soft", "ink", "ink-3", "ink-4", "muted", "faint", "amber", "orange", "red"]);
   const agingColors = { "Entre 3d e 5d": colors.amber, "Entre 5d e 10d": colors.orange, ">10d": colors.red };
   const font = getComputedStyle(document.body).fontFamily;
-  const tables = [
-    { title: `Responsável × Aging · ${filters.region || "TNE geral"}`, pivot: view.general },
-    ...(filters.region ? [] : view.regional.map(({ region, pivot }) => ({ title: `Responsável × Aging · ${region}`, pivot })))
-  ];
   const padding = 24;
   const labelWidth = 150;
   const agingWidth = 96;
@@ -895,7 +908,7 @@ function renderPivotImage(view) {
   context.fillText("Report Genesis TNE", padding, 34);
   context.fillStyle = colors.muted;
   context.font = `12px ${font}`;
-  context.fillText(`Sites por responsável e aging · ${describeFilters()} · ${formatDateTime(view.now)}`, padding, 56);
+  context.fillText(`${subtitle} · ${describeFilters()} · ${formatDateTime(view.now)}`, padding, 56);
 
   const columnX = [padding + labelWidth, ...AGING_BUCKETS.map((_, index) => padding + labelWidth + agingWidth * (index + 1))];
   const drawRow = (y, label, values, { header = false, total = false } = {}) => {
@@ -933,11 +946,11 @@ function renderPivotImage(view) {
     context.font = `600 14px ${font}`;
     context.fillText(table.title, padding, y + 12);
     y += 30;
-    drawRow(y, "RESPONSÁVEL", [...AGING_BUCKETS.map(({ label }) => label), "TOTAL"], { header: true });
+    drawRow(y, firstColumn, [...AGING_BUCKETS.map(({ label }) => label), "TOTAL"], { header: true });
     y += rowHeight;
     const values = (counts) => [...AGING_BUCKETS.map(({ label }) => (counts.aging[label] ? formatCount(counts.aging[label]) : "–")), formatCount(counts.total)];
-    for (const [responsible, counts] of table.pivot.rows) {
-      drawRow(y, responsible, values(counts));
+    for (const [label, counts] of table.pivot.rows) {
+      drawRow(y, label, values(counts));
       y += rowHeight;
     }
     drawRow(y, "Total geral", values(table.pivot.total), { total: true });
@@ -954,20 +967,38 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-async function copyPivotImage() {
+const IMAGE_COPIES = {
+  responsavel: { copied: "Tabelas Responsável × Aging copiadas como imagem.", downloaded: "as tabelas foram baixadas como PNG", file: "report-genesis-TNE" },
+  anf: { copied: "Tabela ANF × Aging copiada como imagem.", downloaded: "a tabela ANF foi baixada como PNG", file: "report-genesis-ANF" }
+};
+
+async function copyPivotImage(kind = "responsavel", button = null) {
   if (!currentView) return;
-  const imagePromise = renderPivotImage(currentView);
+  const { copied, downloaded, file } = IMAGE_COPIES[kind];
+  const imagePromise = renderPivotImage(currentView, kind);
+  let message;
   try {
     if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("Clipboard indisponível");
     await navigator.clipboard.write([new ClipboardItem({ "image/png": imagePromise })]);
-    showFeedback("Tabelas Responsável × Aging copiadas como imagem.", "ok");
+    message = "Copiado!";
+    showFeedback(copied, "ok");
   } catch {
     try {
-      downloadBlob(await imagePromise, `report-genesis-TNE-${localDateStamp()}.png`);
-      showFeedback("O navegador não permite copiar a imagem; as tabelas foram baixadas como PNG.", "ok");
+      downloadBlob(await imagePromise, `${file}-${localDateStamp()}.png`);
+      message = "Baixado em PNG";
+      showFeedback(`O navegador não permite copiar a imagem; ${downloaded}.`, "ok");
     } catch {
-      showFeedback("Não foi possível gerar a imagem das tabelas.");
+      message = "Falhou";
+      showFeedback("Não foi possível gerar a imagem.");
     }
+  }
+  // O aviso fica no topo da página; o botão também confirma, perto de quem clicou.
+  const label = button?.querySelector("span");
+  if (label) {
+    const original = label.dataset.original || label.textContent;
+    label.dataset.original = original;
+    label.textContent = message;
+    setTimeout(() => { label.textContent = original; }, 2000);
   }
 }
 
@@ -1098,7 +1129,8 @@ unassignedButton.addEventListener("click", () => {
   if (filters.onlyUnassigned) document.getElementById("details-title").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 document.getElementById("copy-report-button").addEventListener("click", copyGenesisReport);
-document.getElementById("copy-image-button").addEventListener("click", copyPivotImage);
+document.getElementById("copy-image-button").addEventListener("click", () => copyPivotImage("responsavel"));
+document.getElementById("copy-anf-button").addEventListener("click", (event) => copyPivotImage("anf", event.currentTarget));
 document.getElementById("export-button").addEventListener("click", exportGenesisExcel);
 clearButton.addEventListener("click", clearAll);
 

@@ -167,9 +167,15 @@
         <div id="regional-tables" class="mb-7 grid grid-cols-1 gap-5 xl:grid-cols-2"></div>
 
         <section class="panel mb-7 overflow-hidden rounded-md" aria-labelledby="anf-title">
-          <div class="px-5 pb-3 pt-5">
-            <h3 id="anf-title" class="font-semibold">ANF × Aging · TNE geral</h3>
-            <p class="mt-1 text-xs text-[color:var(--muted)]">Mesmos sites do quadro por responsável (todos os responsáveis do report), agrupados por ANF e faixa de dias.</p>
+          <div class="flex flex-col gap-3 px-5 pb-3 pt-5 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 id="anf-title" class="font-semibold">ANF × Aging · TNE geral</h3>
+              <p class="mt-1 text-xs text-[color:var(--muted)]">Mesmos sites do quadro por responsável (todos os responsáveis do report), agrupados por ANF e faixa de dias.</p>
+            </div>
+            <button id="copy-anf-button" type="button" title="Copia a tabela ANF × Aging como imagem (tema claro)" class="inline-flex shrink-0 items-center justify-center gap-2 rounded-sm border border-[color:var(--green)] bg-[color:var(--surface)] px-3 py-2 text-sm font-semibold text-[color:var(--green)] transition hover:bg-[color:var(--green-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--green)]">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 20 20" fill="none"><rect x="3.5" y="4.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 9h13M8 4.5v11" stroke="currentColor" stroke-width="1.5"/></svg>
+              <span>Copiar parcial ANF</span>
+            </button>
           </div>
           <div id="anf-table" class="overflow-x-auto"></div>
         </section>
@@ -233,6 +239,6 @@
     <footer class="pt-8 text-center text-[11px] text-[color:var(--faint)]">Report Genesis <span aria-hidden="true">·</span> leitura e processamento locais</footer>
   </div>
 
-  <script src="app/genesis.js?v=20261122a"></script>
+  <script src="app/genesis.js?v=20261122b"></script>
 </body>
 </html>
