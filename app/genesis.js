@@ -450,13 +450,19 @@ function computeView() {
   const byResponsible = (records) => buildPivot(records, (record) => record.responsible, REPORT_RESPONSIBLES);
   const regions = Object.keys(REGIONS).filter((region) => !filters.region || filters.region === region);
   const providers = reported.filter((record) => record.responsible === PROVIDER_RESPONSIBLE);
+  const anf = anfPivot(reported);
   return {
     now,
     scoped,
     reported,
     unassigned: scoped.filter((record) => !record.responsible),
     general: byResponsible(reported),
-    anf: anfPivot(reported),
+    anf,
+    // Responsável × Aging de cada ANF, na mesma ordem da tabela ANF × Aging.
+    byAnf: anf.rows.map(([label]) => ({
+      anf: label,
+      pivot: byResponsible(reported.filter((record) => (record.anf || NO_ANF_LABEL) === label))
+    })),
     regional: regions.map((region) => ({ region, pivot: byResponsible(reported.filter((record) => record.region === region)) })),
     providerCauses: buildPivot(providers, (record) => record.cause || "(sem causa)"),
     providers: [...providers].sort(compareAnf)
@@ -755,9 +761,45 @@ function render(errorMessage = "") {
   regionalWrap.className = `mb-7 grid grid-cols-1 gap-5 ${view.regional.length > 1 ? "xl:grid-cols-2" : ""}`;
   document.getElementById("anf-title").textContent = `ANF × Aging · ${filters.region || "TNE geral"}`;
   renderPivotTable(document.getElementById("anf-table"), view.anf, "ANF", "Nenhum site com estes filtros.");
+  renderAnfResponsibleTables(view);
   renderPivotTable(document.getElementById("provider-cause-table"), view.providerCauses, "Causa", "Nenhuma linha de provedor com estes filtros.");
   renderProviders(view);
   renderDetails(view);
+}
+
+// Uma tabela Responsável × Aging por ANF, cada uma com o botão de copiar como imagem.
+function renderAnfResponsibleTables(view) {
+  const scope = filters.region || "TNE geral";
+  document.getElementById("copy-anf-all-button").disabled = !view.byAnf.length;
+  const wrap = document.getElementById("anf-responsible-tables");
+  if (!view.byAnf.length) {
+    wrap.replaceChildren(cell("p", "Nenhum site com estes filtros.", "panel rounded-md px-5 py-6 text-center text-sm text-[color:var(--muted)]"));
+    return;
+  }
+  wrap.replaceChildren(...view.byAnf.map(({ anf, pivot }, index) => {
+    const section = document.createElement("section");
+    section.className = "panel overflow-hidden rounded-md";
+    const titleId = `anf-responsible-title-${index}`;
+    section.setAttribute("aria-labelledby", titleId);
+    const header = document.createElement("div");
+    header.className = "flex items-start justify-between gap-3 px-5 pb-3 pt-5";
+    const text = document.createElement("div");
+    const title = cell("h4", `ANF ${anf}`, "font-semibold");
+    title.id = titleId;
+    text.append(title, cell("p", `Responsável × Aging · ${scope} · ${formatCount(pivot.total.total)} site(s)`, "mt-1 text-xs text-[color:var(--muted)]"));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = `Copia a tabela da ANF ${anf} como imagem (tema claro)`;
+    button.className = "inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-[color:var(--line-strong)] bg-[color:var(--surface)] px-2.5 py-1.5 text-xs font-semibold text-[color:var(--green)] transition hover:bg-[color:var(--green-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--green)]";
+    button.append(cell("span", "Copiar"));
+    button.addEventListener("click", () => copyPivotImage("anf-responsavel", button, anf));
+    header.append(text, button);
+    const scroll = document.createElement("div");
+    scroll.className = "overflow-x-auto";
+    renderPivotTable(scroll, pivot, "Responsável", "");
+    section.append(header, scroll);
+    return section;
+  }));
 }
 
 // ===== Copiar report =====
@@ -863,10 +905,18 @@ function readThemeColors(names) {
 
 // Desenha as tabelas Responsável × Aging num canvas, como o "Copiar gráfico" do backlog.
 // Tabelas de cada imagem: "responsavel" (Copiar imagem) ou "anf" (Copiar parcial ANF).
-function imageTables(view, kind) {
+function imageTables(view, kind, anf = null) {
   const scope = filters.region || "TNE geral";
   if (kind === "anf") {
     return { subtitle: "Sites por ANF e aging", firstColumn: "ANF", tables: [{ title: `ANF × Aging · ${scope}`, pivot: view.anf }] };
+  }
+  if (kind === "anf-responsavel") {
+    const items = anf === null ? view.byAnf : view.byAnf.filter((item) => item.anf === anf);
+    return {
+      subtitle: "Sites por responsável e aging, por ANF",
+      firstColumn: "RESPONSÁVEL",
+      tables: items.map((item) => ({ title: `Responsável × Aging · ANF ${item.anf} · ${scope}`, pivot: item.pivot }))
+    };
   }
   return {
     subtitle: "Sites por responsável e aging",
@@ -878,8 +928,8 @@ function imageTables(view, kind) {
   };
 }
 
-function renderPivotImage(view, kind = "responsavel") {
-  const { subtitle, firstColumn, tables } = imageTables(view, kind);
+function renderPivotImage(view, kind = "responsavel", anf = null) {
+  const { subtitle, firstColumn, tables } = imageTables(view, kind, anf);
   const colors = readThemeColors(["surface", "sunken", "line", "line-soft", "ink", "ink-3", "ink-4", "muted", "faint", "amber", "orange", "red"]);
   const agingColors = { "Entre 3d e 5d": colors.amber, "Entre 5d e 10d": colors.orange, ">10d": colors.red };
   const font = getComputedStyle(document.body).fontFamily;
@@ -969,13 +1019,17 @@ function downloadBlob(blob, name) {
 
 const IMAGE_COPIES = {
   responsavel: { copied: "Tabelas Responsável × Aging copiadas como imagem.", downloaded: "as tabelas foram baixadas como PNG", file: "report-genesis-TNE" },
-  anf: { copied: "Tabela ANF × Aging copiada como imagem.", downloaded: "a tabela ANF foi baixada como PNG", file: "report-genesis-ANF" }
+  anf: { copied: "Tabela ANF × Aging copiada como imagem.", downloaded: "a tabela ANF foi baixada como PNG", file: "report-genesis-ANF" },
+  "anf-responsavel": { copied: "Tabelas por ANF copiadas como imagem.", downloaded: "as tabelas por ANF foram baixadas como PNG", file: "report-genesis-responsavel-por-ANF" }
 };
 
-async function copyPivotImage(kind = "responsavel", button = null) {
+async function copyPivotImage(kind = "responsavel", button = null, anf = null) {
   if (!currentView) return;
-  const { copied, downloaded, file } = IMAGE_COPIES[kind];
-  const imagePromise = renderPivotImage(currentView, kind);
+  const settings = IMAGE_COPIES[kind];
+  const copied = anf === null ? settings.copied : `Tabela da ANF ${anf} copiada como imagem.`;
+  const downloaded = anf === null ? settings.downloaded : `a tabela da ANF ${anf} foi baixada como PNG`;
+  const file = anf === null ? settings.file : `report-genesis-ANF-${anf.replace(/[^\w-]+/g, "")}`;
+  const imagePromise = renderPivotImage(currentView, kind, anf);
   let message;
   try {
     if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("Clipboard indisponível");
@@ -1028,6 +1082,17 @@ function exportGenesisExcel() {
     if (!filters.region) XLSX.utils.book_append_sheet(book, pivotSheet(pivot, "Responsável"), `Responsável ${region}`);
   }
   XLSX.utils.book_append_sheet(book, pivotSheet(view.anf, "ANF"), "ANF");
+  const anfRows = [];
+  for (const { anf, pivot } of view.byAnf) {
+    if (anfRows.length) anfRows.push([]);
+    anfRows.push([`ANF ${anf}`]);
+    anfRows.push(["Responsável", ...AGING_BUCKETS.map(({ label }) => label), "Total"]);
+    anfRows.push(...pivot.rows.map(([label, counts]) => [label, ...AGING_BUCKETS.map(({ label: aging }) => counts.aging[aging]), counts.total]));
+    anfRows.push(["Total geral", ...AGING_BUCKETS.map(({ label }) => pivot.total.aging[label]), pivot.total.total]);
+  }
+  const anfSheet = XLSX.utils.aoa_to_sheet(anfRows.length ? anfRows : [["Nenhum site com estes filtros."]]);
+  anfSheet["!cols"] = [{ wch: 16 }, ...AGING_BUCKETS.map(() => ({ wch: 15 })), { wch: 8 }];
+  XLSX.utils.book_append_sheet(book, anfSheet, "Responsável por ANF");
   XLSX.utils.book_append_sheet(book, pivotSheet(view.providerCauses, "Causa"), "Provedores por causa");
   const providerSheet = XLSX.utils.aoa_to_sheet([
     ["ANF", "EVE/CRQ", "Site", "Aging", "Link"],
@@ -1131,6 +1196,7 @@ unassignedButton.addEventListener("click", () => {
 document.getElementById("copy-report-button").addEventListener("click", copyGenesisReport);
 document.getElementById("copy-image-button").addEventListener("click", () => copyPivotImage("responsavel"));
 document.getElementById("copy-anf-button").addEventListener("click", (event) => copyPivotImage("anf", event.currentTarget));
+document.getElementById("copy-anf-all-button").addEventListener("click", (event) => copyPivotImage("anf-responsavel", event.currentTarget));
 document.getElementById("export-button").addEventListener("click", exportGenesisExcel);
 clearButton.addEventListener("click", clearAll);
 
