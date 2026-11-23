@@ -554,23 +554,21 @@ function renderPivotTable(container, pivot, firstColumnLabel, emptyMessage) {
 function renderCards(view) {
   const total = view.general.total.total;
   const cards = [
-    { label: "Total no report", value: total, note: `Sites dos ${REPORT_RESPONSIBLES.length} responsáveis`, tone: "var(--blue)" },
+    { label: "Total no report", value: total, tone: "var(--blue)" },
     ...view.general.rows.map(([responsible, counts]) => ({
       label: responsible,
       value: counts.total,
-      note: `${total ? Math.round((counts.total / total) * 100) : 0}% do report`,
       tone: responsible === PROVIDER_RESPONSIBLE ? "var(--green)" : "var(--line-strong)"
     })),
-    { label: "Acima de 10 dias", value: view.general.total.aging[OVER_10_DAYS], note: "Faixa >10d", tone: "var(--red)" }
+    { label: "Acima de 10 dias", value: view.general.total.aging[OVER_10_DAYS], tone: "var(--red)" }
   ];
-  document.getElementById("summary-cards").replaceChildren(...cards.map(({ label, value, note, tone }) => {
+  document.getElementById("summary-cards").replaceChildren(...cards.map(({ label, value, tone }) => {
     const article = document.createElement("article");
     article.className = "panel rounded-md border-l-4 p-4";
     article.style.borderLeftColor = tone;
     article.append(
       cell("p", label, "text-xs font-semibold uppercase tracking-wide text-[color:var(--muted)]"),
-      cell("p", formatCount(value), "tabular mt-2 text-2xl font-semibold tracking-tight"),
-      cell("p", note, "mt-1 text-xs text-[color:var(--muted)]")
+      cell("p", formatCount(value), "tabular mt-2 text-2xl font-semibold tracking-tight")
     );
     return article;
   }));
