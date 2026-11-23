@@ -894,6 +894,13 @@ function imageTables(view, kind) {
   if (kind === "anf-responsavel") {
     return { subtitle: "Sites por ANF e responsável", firstColumn: "ANF", tables: [{ title: `ANF × Responsável · ${scope}`, pivot: view.anfResponsible }] };
   }
+  if (kind === "regional") {
+    return {
+      subtitle: "Sites por responsável e aging",
+      firstColumn: "RESPONSÁVEL",
+      tables: view.regional.map(({ region, pivot }) => ({ title: `Responsável × Aging · ${region}`, pivot }))
+    };
+  }
   return {
     subtitle: "Sites por responsável e aging",
     firstColumn: "RESPONSÁVEL",
@@ -997,6 +1004,7 @@ function downloadBlob(blob, name) {
 
 const IMAGE_COPIES = {
   responsavel: { copied: "Tabelas Responsável × Aging copiadas como imagem.", downloaded: "as tabelas foram baixadas como PNG", file: "report-genesis-TNE" },
+  regional: { copied: "Tabelas Responsável × Aging de TNE 1 e TNE 2 copiadas como imagem.", downloaded: "as tabelas TNE 1 e TNE 2 foram baixadas como PNG", file: "report-genesis-TNE1-TNE2" },
   anf: { copied: "Tabela ANF × Aging copiada como imagem.", downloaded: "a tabela ANF foi baixada como PNG", file: "report-genesis-ANF" },
   "anf-responsavel": { copied: "Tabela ANF × Responsável copiada como imagem.", downloaded: "a tabela ANF × Responsável foi baixada como PNG", file: "report-genesis-ANF-responsavel" }
 };
@@ -1160,6 +1168,7 @@ unassignedButton.addEventListener("click", () => {
 });
 document.getElementById("copy-report-button").addEventListener("click", copyGenesisReport);
 document.getElementById("copy-image-button").addEventListener("click", () => copyPivotImage("responsavel"));
+document.getElementById("copy-regional-button").addEventListener("click", (event) => copyPivotImage("regional", event.currentTarget));
 document.getElementById("copy-anf-button").addEventListener("click", (event) => copyPivotImage("anf", event.currentTarget));
 document.getElementById("copy-anf-responsible-button").addEventListener("click", (event) => copyPivotImage("anf-responsavel", event.currentTarget));
 document.getElementById("export-button").addEventListener("click", exportGenesisExcel);
