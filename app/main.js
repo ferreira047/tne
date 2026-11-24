@@ -986,7 +986,7 @@ function renderBacklogByState(analysis) {
     labelCell.className = `px-5 py-2.5 ${isTotal ? "text-[color:var(--ink)]" : "text-[color:var(--ink-4)]"}`;
     labelCell.textContent = label;
     row.append(labelCell);
-    for (const [key, color, padding] of [["online", "text-[color:var(--ink-3)]", "px-2"], ["unscheduled", "text-[color:var(--ink-3)]", "px-2"], ["total", "text-[color:var(--ink)]", "px-5"]]) {
+    for (const [key, color, padding] of [["total", "text-[color:var(--ink)]", "px-5"]]) {
       const cell = document.createElement("td");
       cell.className = `tabular ${padding} py-2.5 text-right font-semibold ${color}`;
       cell.textContent = counts[key].toLocaleString("pt-BR");
@@ -998,7 +998,7 @@ function renderBacklogByState(analysis) {
   if (!stateCounts.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 2;
     cell.className = "px-5 py-6 text-center text-sm text-[color:var(--muted)]";
     cell.textContent = "Nenhum chamado em backlog neste grupo.";
     row.append(cell);
@@ -1009,7 +1009,7 @@ function renderBacklogByState(analysis) {
     rows.append(buildRow(item.location, item));
   }
   const sumOf = (key) => stateCounts.reduce((total, item) => total + item[key], 0);
-  foot.append(buildRow("Total", { online: sumOf("online"), unscheduled: sumOf("unscheduled"), total: sumOf("total") }, true));
+  foot.append(buildRow("Total", { total: sumOf("total") }, true));
 }
 
 function renderAnalysis(fullAnalysis) {
@@ -1502,8 +1502,8 @@ function renderBacklogByStateImage(analysis) {
   const font = getComputedStyle(document.body).fontFamily;
   const stateCounts = analysis.backlogCountsByState[currentBacklogGroup];
   const sumOf = (key) => stateCounts.reduce((total, item) => total + item[key], 0);
-  const rows = [...stateCounts, { location: "Total", online: sumOf("online"), unscheduled: sumOf("unscheduled"), total: sumOf("total"), isTotal: true }];
-  const width = 440;
+  const rows = [...stateCounts, { location: "Total", total: sumOf("total"), isTotal: true }];
+  const width = 360;
   const headerHeight = 96;
   const columnHeaderHeight = 34;
   const rowHeight = 34;
@@ -1526,13 +1526,11 @@ function renderBacklogByStateImage(analysis) {
   context.fillText("Backlog por estado", 22, 38);
   context.fillStyle = colors.muted;
   context.font = `12px ${font}`;
-  context.fillText(`${BACKLOG_GROUP_LABELS[currentBacklogGroup]} · ${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`, 22, 60);
+  context.fillText(`${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`, 22, 60);
   context.fillText("Agendadas (Iniciado / Não iniciado) + não agendadas.", 22, 78);
 
   const columns = [
     { label: "ESTADO", x: 22, align: "left" },
-    { key: "online", label: "AGEND.", x: 250, align: "right" },
-    { key: "unscheduled", label: "NÃO AGEND.", x: 340, align: "right" },
     { key: "total", label: "TOTAL", x: width - 22, align: "right" }
   ];
   let y = headerHeight;
@@ -1563,7 +1561,7 @@ function renderBacklogByStateImage(analysis) {
     context.font = `600 13px ${font}`;
     for (const column of columns.slice(1)) {
       context.textAlign = "right";
-      context.fillStyle = column.key === "total" ? colors.ink : colors["ink-3"];
+      context.fillStyle = colors.ink;
       context.fillText(row[column.key].toLocaleString("pt-BR"), column.x, baseline);
     }
     y += rowHeight;
@@ -1631,11 +1629,11 @@ function exportBacklogTsksByState() {
   const workbook = XLSX.utils.book_new();
   const summaryRows = currentAnalysis.backlogCountsByState[currentBacklogGroup];
   const summarySheet = XLSX.utils.aoa_to_sheet([
-    ["Estado", "Agendadas", "Não agendadas", "Total"],
-    ...summaryRows.map(({ location, online, unscheduled, total }) => [location, online, unscheduled, total]),
-    ["Total", ...["online", "unscheduled", "total"].map((key) => summaryRows.reduce((sum, item) => sum + item[key], 0))]
+    ["Estado", "Total"],
+    ...summaryRows.map(({ location, total }) => [location, total]),
+    ["Total", summaryRows.reduce((sum, item) => sum + item.total, 0)]
   ]);
-  summarySheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
+  summarySheet["!cols"] = [{ wch: 22 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumo");
   appendSheet(workbook, sorted, "Todas");
   for (const location of locationOrder) {
