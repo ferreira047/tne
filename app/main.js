@@ -489,6 +489,8 @@ function analyzeSelectedSheet() {
   const entrantsBySource = { online: 0, unscheduled: 0 };
   const createBacklogStateCounts = () => new Map([...TECHNICIAN_LOCATION_ORDER, "Outros"].map((location) => [location, { online: 0, unscheduled: 0 }]));
   const backlogCountsByState = { all: createBacklogStateCounts(), technician: createBacklogStateCounts(), commandCenter: createBacklogStateCounts() };
+  // Cada chamado do backlog, para a exportação das TSKs por estado.
+  const backlogTickets = [];
   const errors = [];
   const warnings = [];
   const sheetLabels = [];
@@ -549,6 +551,17 @@ function analyzeSelectedSheet() {
       const bucketGroup = classifyBucket(row[bucketIndex]) === "Fila de técnicos" ? "technician" : "commandCenter";
       backlogCountsByState.all.get(location)[slot.key] += 1;
       backlogCountsByState[bucketGroup].get(location)[slot.key] += 1;
+      backlogTickets.push({
+        tsk,
+        source: label,
+        location,
+        group: bucketGroup,
+        bucket: String(row[bucketIndex] ?? "").trim(),
+        cm: stateCm,
+        status: String(row[statusIndex] ?? "").trim(),
+        priority: String(row[priorityIndex] ?? "").trim(),
+        createdAt: String(row[nttCreatedIndex] ?? "").trim()
+      });
     }
     entrantsBySource[slot.key] = countTickets(sourceRows.filter((row) => isCreatedToday(row[nttCreatedIndex])));
     backlogCount += backlogBySource[slot.key];
@@ -658,6 +671,7 @@ function analyzeSelectedSheet() {
         .map(([location, stateCounts]) => ({ location, ...stateCounts, total: stateCounts.online + stateCounts.unscheduled }))
         .filter(({ total }) => total)
     ])),
+    backlogTickets,
     statusCounts,
     scheduledStatusCounts,
     unknownStatuses,
@@ -1480,6 +1494,160 @@ async function copyGroupShareImage() {
   }
 }
 
+const BACKLOG_GROUP_LABELS = { all: "Todas", technician: "Fila técnica", commandCenter: "Centralizado" };
+
+// Desenha o quadro "Backlog por estado" (grupo selecionado) num canvas, para colar no report.
+function renderBacklogByStateImage(analysis) {
+  const colors = readThemeColors(["surface", "sunken", "line", "line-soft", "ink", "ink-3", "ink-4", "muted"]);
+  const font = getComputedStyle(document.body).fontFamily;
+  const stateCounts = analysis.backlogCountsByState[currentBacklogGroup];
+  const sumOf = (key) => stateCounts.reduce((total, item) => total + item[key], 0);
+  const rows = [...stateCounts, { location: "Total", online: sumOf("online"), unscheduled: sumOf("unscheduled"), total: sumOf("total"), isTotal: true }];
+  const width = 440;
+  const headerHeight = 96;
+  const columnHeaderHeight = 34;
+  const rowHeight = 34;
+  const height = headerHeight + columnHeaderHeight + rows.length * rowHeight + 1;
+  const scale = Math.max(2, window.devicePixelRatio || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const context = canvas.getContext("2d");
+  context.scale(scale, scale);
+
+  context.fillStyle = colors.surface;
+  context.fillRect(0, 0, width, height);
+
+  const now = new Date();
+  context.textBaseline = "alphabetic";
+  context.textAlign = "left";
+  context.fillStyle = colors.ink;
+  context.font = `600 17px ${font}`;
+  context.fillText("Backlog por estado", 22, 38);
+  context.fillStyle = colors.muted;
+  context.font = `12px ${font}`;
+  context.fillText(`${BACKLOG_GROUP_LABELS[currentBacklogGroup]} · ${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`, 22, 60);
+  context.fillText("Agendadas (Iniciado / Não iniciado) + não agendadas.", 22, 78);
+
+  const columns = [
+    { label: "ESTADO", x: 22, align: "left" },
+    { key: "online", label: "AGEND.", x: 250, align: "right" },
+    { key: "unscheduled", label: "NÃO AGEND.", x: 340, align: "right" },
+    { key: "total", label: "TOTAL", x: width - 22, align: "right" }
+  ];
+  let y = headerHeight;
+  context.fillStyle = colors.sunken;
+  context.fillRect(0, y, width, columnHeaderHeight);
+  context.fillStyle = colors.muted;
+  context.font = `600 11px ${font}`;
+  for (const column of columns) {
+    context.textAlign = column.align;
+    context.fillText(column.label, column.x, y + 22);
+  }
+  y += columnHeaderHeight;
+
+  for (const row of rows) {
+    if (row.isTotal) {
+      context.fillStyle = colors.sunken;
+      context.fillRect(0, y, width, rowHeight);
+      context.fillStyle = colors.line;
+    } else {
+      context.fillStyle = colors["line-soft"];
+    }
+    context.fillRect(0, y, width, 1);
+    const baseline = y + 22;
+    context.textAlign = "left";
+    context.fillStyle = row.isTotal ? colors.ink : colors["ink-4"];
+    context.font = `${row.isTotal ? "600 " : ""}13px ${font}`;
+    context.fillText(row.location, 22, baseline);
+    context.font = `600 13px ${font}`;
+    for (const column of columns.slice(1)) {
+      context.textAlign = "right";
+      context.fillStyle = column.key === "total" ? colors.ink : colors["ink-3"];
+      context.fillText(row[column.key].toLocaleString("pt-BR"), column.x, baseline);
+    }
+    y += rowHeight;
+  }
+  context.strokeStyle = colors.line;
+  context.strokeRect(0.5, 0.5, width - 1, height - 1);
+
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Falha ao gerar imagem"))), "image/png"));
+}
+
+async function copyBacklogByStateImage() {
+  if (!currentAnalysis) return;
+  const imagePromise = renderBacklogByStateImage(currentAnalysis);
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("Clipboard indisponível");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": imagePromise })]);
+    showFeedback("Parcial do Backlog por estado copiado como imagem.", "success");
+  } catch {
+    try {
+      downloadBlob(await imagePromise, "backlog-por-estado.png");
+      showFeedback("O navegador não permite copiar a imagem; o Backlog por estado foi baixado como PNG.", "success");
+    } catch {
+      showFeedback("Não foi possível gerar a imagem do Backlog por estado.");
+    }
+  }
+}
+
+// Planilha com as TSKs do backlog (grupo selecionado): aba "Todas" e uma aba por estado.
+function exportBacklogTsksByState() {
+  if (!currentAnalysis) return;
+  if (!window.XLSX?.utils?.book_new || !window.XLSX?.utils?.aoa_to_sheet || !window.XLSX?.writeFile) {
+    showFeedback("Não foi possível criar a planilha Excel. Verifique sua conexão e recarregue a página.");
+    return;
+  }
+  const tickets = currentAnalysis.backlogTickets.filter((ticket) => currentBacklogGroup === "all" || ticket.group === currentBacklogGroup);
+  if (!tickets.length) {
+    showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
+    return;
+  }
+  const locationOrder = [...TECHNICIAN_LOCATION_ORDER, "Outros"];
+  const sorted = [...tickets].sort((left, right) =>
+    locationOrder.indexOf(left.location) - locationOrder.indexOf(right.location)
+    || left.source.localeCompare(right.source, "pt-BR")
+    || left.tsk.localeCompare(right.tsk, "pt-BR", { numeric: true })
+  );
+  const header = ["Estado", "TSK", "Planilha", "Grupo", "Bucket", "CM", "Status", "Prioridade", "Criação do NTT"];
+  const toRow = (ticket) => [
+    ticket.location,
+    ticket.tsk,
+    ticket.source,
+    ticket.group === "technician" ? "Fila técnica" : "Centralizado",
+    ticket.bucket,
+    ticket.cm,
+    ticket.status,
+    ticket.priority,
+    ticket.createdAt
+  ];
+  const columnWidths = [22, 16, 14, 14, 40, 24, 14, 10, 20].map((wch) => ({ wch }));
+  const appendSheet = (workbook, rows, name) => {
+    const sheet = XLSX.utils.aoa_to_sheet([header, ...rows.map(toRow)]);
+    sheet["!cols"] = columnWidths;
+    XLSX.utils.book_append_sheet(workbook, sheet, name.slice(0, 31));
+  };
+
+  const workbook = XLSX.utils.book_new();
+  const summaryRows = currentAnalysis.backlogCountsByState[currentBacklogGroup];
+  const summarySheet = XLSX.utils.aoa_to_sheet([
+    ["Estado", "Agendadas", "Não agendadas", "Total"],
+    ...summaryRows.map(({ location, online, unscheduled, total }) => [location, online, unscheduled, total]),
+    ["Total", ...["online", "unscheduled", "total"].map((key) => summaryRows.reduce((sum, item) => sum + item[key], 0))]
+  ]);
+  summarySheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumo");
+  appendSheet(workbook, sorted, "Todas");
+  for (const location of locationOrder) {
+    const stateTickets = sorted.filter((ticket) => ticket.location === location);
+    if (stateTickets.length) appendSheet(workbook, stateTickets, location);
+  }
+
+  const groupSuffix = { all: "todas", technician: "fila-tecnica", commandCenter: "centralizado" }[currentBacklogGroup];
+  XLSX.writeFile(workbook, `backlog-por-estado-${groupSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showFeedback(`${tickets.length.toLocaleString("pt-BR")} TSKs do backlog exportadas por estado.`, "success");
+}
+
 function exportTechniciansByRegion() {
   if (!currentAnalysis) return;
   if (!window.XLSX?.utils?.book_new || !window.XLSX?.utils?.aoa_to_sheet || !window.XLSX?.writeFile) {
@@ -1677,6 +1845,8 @@ document.getElementById("copy-summary-button").addEventListener("click", copyBac
 fetchGenesisNeDownCount();
 document.getElementById("copy-chart-button").addEventListener("click", copyGroupShareImage);
 document.getElementById("export-technicians-button").addEventListener("click", exportTechniciansByRegion);
+document.getElementById("copy-backlog-state-image-button").addEventListener("click", copyBacklogByStateImage);
+document.getElementById("export-backlog-state-button").addEventListener("click", exportBacklogTsksByState);
 clearButton.addEventListener("click", () => clearAnalysis());
 // Planilhas guardadas na sessão: a ONLINE pode vir da Análise de técnicos ou dos Chamados repetidos;
 // a NÃO AGENDADAS, dos Chamados repetidos.
