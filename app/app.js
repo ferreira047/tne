@@ -129,6 +129,8 @@ const DONUT_CENTERS = {
 
 // Cor do card e da fatia "Não iniciaram" (mesmo azul do card Técnicos).
 const NAO_INICIARAM_COLOR = 'var(--blue)';
+// Cor do card e da fatia "Com atividade iniciada".
+const COM_INICIADA_COLOR = 'var(--ink-2)';
 
 const SITUACAO_FILTER_OPTIONS = [
   ['all', 'Todas'],
@@ -136,7 +138,8 @@ const SITUACAO_FILTER_OPTIONS = [
   ['semConclusao', 'Sem conclusão'],
   ['semConclusaoComPendencia', 'Sem conclusão + com pendência'],
   ['semConclusaoSemPendencia', 'Sem conclusão + sem pendência'],
-  ['naoIniciaram', 'Não iniciaram']
+  ['naoIniciaram', 'Não iniciaram'],
+  ['comIniciada', 'Com atividade iniciada']
 ];
 
 const TECH_TABLE_VIEWS = {
@@ -145,6 +148,7 @@ const TECH_TABLE_VIEWS = {
   semConclusaoSemPendencia: { title: 'Técnicos sem conclusão + sem pendência', description: 'Caso crítico: concluída = 0 e pendente = 0.' },
   comConclusao: { title: 'Técnicos com conclusão', description: 'Pelo menos uma atividade concluída.' },
   naoIniciaram: { title: 'Técnicos que não iniciaram', description: 'Só atividades não iniciadas: nada concluído, iniciado ou pendente.' },
+  comIniciada: { title: 'Técnicos com atividade iniciada', description: 'Pelo menos uma atividade com status Iniciado agora (qualquer tipo).' },
   todos: { title: 'Todos os técnicos', description: 'Todas as situações.' }
 };
 
@@ -520,6 +524,13 @@ const isNaoIniciou = (record) => {
   return record.naoIniciado > 0 && record.concluida <= 0 && (all.iniciado || 0) <= 0 && (all.pendente || 0) <= 0;
 };
 
+// Tem atividade em andamento: pelo menos uma com status Iniciado, de qualquer tipo
+// (mesma base do "Não iniciaram").
+const isComIniciada = (record) => {
+  const all = record.countsByTipo ? record.countsByTipo.all : record;
+  return (all.iniciado || 0) > 0;
+};
+
 const SITUACAO_PREDICATES = {
   all: () => true,
   todos: () => true,
@@ -527,7 +538,8 @@ const SITUACAO_PREDICATES = {
   semConclusao: isSemConclusao,
   semConclusaoComPendencia: isSemConclusaoComPendencia,
   semConclusaoSemPendencia: isSemConclusaoSemPendencia,
-  naoIniciaram: isNaoIniciou
+  naoIniciaram: isNaoIniciou,
+  comIniciada: isComIniciada
 };
 
 function getSituacao(record) {
@@ -799,6 +811,9 @@ function renderCards(summary, base) {
   const naoIniciaram = base.filter(isNaoIniciou).length;
   $('count-nao-iniciaram').textContent = fmt(naoIniciaram);
   $('caption-nao-iniciaram').textContent = `${percent(naoIniciaram, base.length)}% de ${fmt(base.length)} técnicos`;
+  const comIniciada = base.filter(isComIniciada).length;
+  $('count-com-iniciada').textContent = fmt(comIniciada);
+  $('caption-com-iniciada').textContent = `${percent(comIniciada, base.length)}% de ${fmt(base.length)} técnicos · em andamento`;
   $('count-com-conclusao').textContent = fmt(summary.comConclusao);
   $('count-sem-conclusao').textContent = fmt(summary.semConclusao);
   $('count-critico').textContent = fmt(summary.semConclusaoSemPendencia);
@@ -882,6 +897,14 @@ function donutView(base) {
       { label: 'Iniciaram alguma atividade', color: 'var(--track-strong)', count: base.length - naoIniciaram }
     ];
     return { segments, total: base.length, center: segments[0], caption: ['Não iniciaram'], subtitle: 'Percentual sobre todos os técnicos, sem o filtro de situação.' };
+  }
+  if (situacao === 'comIniciada') {
+    const comIniciada = base.filter(isComIniciada).length;
+    const segments = [
+      { label: 'Com atividade iniciada', color: COM_INICIADA_COLOR, count: comIniciada },
+      { label: 'Sem atividade iniciada', color: 'var(--track-strong)', count: base.length - comIniciada }
+    ];
+    return { segments, total: base.length, center: segments[0], caption: ['Com atividade', 'iniciada'], subtitle: 'Percentual sobre todos os técnicos, sem o filtro de situação.' };
   }
 
   // Fatias, legenda e centro usam a mesma base: os técnicos dos filtros atuais, sem o de
