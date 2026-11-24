@@ -138,6 +138,13 @@ let currentAnalysis = null;
 let technicianSortOrder = "most";
 let currentView = "completed";
 let currentStateGroup = "all";
+let currentBacklogGroup = "all";
+
+const BACKLOG_GROUP_DESCRIPTIONS = {
+  all: "Chamados em backlog (agendadas em Iniciado ou Não iniciado + não agendadas, sem DSOC MONITORACAO PREDITIVA), agrupados pelo estado do CM (coluna AK).",
+  technician: "Somente chamados em backlog da fila técnica, agrupados pelo estado do CM (coluna AK).",
+  commandCenter: "Somente chamados em backlog do Centralizado, agrupados pelo estado do CM (coluna AK)."
+};
 
 const STATE_GROUP_DESCRIPTIONS = {
   all: "Todas as TSKs do tipo selecionado, agrupadas pelo estado do CM (coluna AK).",
@@ -480,6 +487,8 @@ function analyzeSelectedSheet() {
   // Linhas da ONLINE: o quadro "Contagem por status" mostra só as agendadas.
   const scheduledRows = new Set();
   const entrantsBySource = { online: 0, unscheduled: 0 };
+  const createBacklogStateCounts = () => new Map([...TECHNICIAN_LOCATION_ORDER, "Outros"].map((location) => [location, { online: 0, unscheduled: 0 }]));
+  const backlogCountsByState = { all: createBacklogStateCounts(), technician: createBacklogStateCounts(), commandCenter: createBacklogStateCounts() };
   const errors = [];
   const warnings = [];
   const sheetLabels = [];
@@ -522,9 +531,25 @@ function analyzeSelectedSheet() {
     const countTickets = (sourceRowsToCount) => scheduled
       ? new Set(sourceRowsToCount.map((row) => String(row[tskIndex] ?? "").trim() || row)).size
       : sourceRowsToCount.length;
-    backlogBySource[slot.key] = countTickets(scheduled
+    const backlogSourceRows = scheduled
       ? sourceRows.filter((row) => backlogStatuses.includes(normalizeText(row[statusIndex])))
-      : sourceRows);
+      : sourceRows;
+    backlogBySource[slot.key] = countTickets(backlogSourceRows);
+    // Quadro "Backlog por estado": mesmas linhas do backlog, pelo estado do CM (coluna AK).
+    // Agendadas: cada TSK conta uma vez só, na primeira linha em que aparece.
+    const seenBacklogTsks = new Set();
+    for (const row of backlogSourceRows) {
+      const tsk = String(row[tskIndex] ?? "").trim();
+      if (scheduled && tsk) {
+        if (seenBacklogTsks.has(tsk)) continue;
+        seenBacklogTsks.add(tsk);
+      }
+      const stateCm = String(row[cmIndex] ?? "").trim();
+      const location = stateCm ? classifyTechnicianLocation(stateCm) : "Outros";
+      const bucketGroup = classifyBucket(row[bucketIndex]) === "Fila de técnicos" ? "technician" : "commandCenter";
+      backlogCountsByState.all.get(location)[slot.key] += 1;
+      backlogCountsByState[bucketGroup].get(location)[slot.key] += 1;
+    }
     entrantsBySource[slot.key] = countTickets(sourceRows.filter((row) => isCreatedToday(row[nttCreatedIndex])));
     backlogCount += backlogBySource[slot.key];
     entrantsCount += entrantsBySource[slot.key];
@@ -626,6 +651,12 @@ function analyzeSelectedSheet() {
       [...counts.entries()]
         .map(([location, stateCounts]) => ({ location, ...stateCounts }))
         .filter(({ completed, cancelled, pending }) => completed || cancelled || pending)
+    ])),
+    backlogCountsByState: Object.fromEntries(Object.entries(backlogCountsByState).map(([group, counts]) => [
+      group,
+      [...counts.entries()]
+        .map(([location, stateCounts]) => ({ location, ...stateCounts, total: stateCounts.online + stateCounts.unscheduled }))
+        .filter(({ total }) => total)
     ])),
     statusCounts,
     scheduledStatusCounts,
@@ -887,7 +918,7 @@ function renderStatusCountsByState(analysis) {
   rows.replaceChildren();
   foot.replaceChildren();
   document.getElementById("state-status-description").textContent = STATE_GROUP_DESCRIPTIONS[currentStateGroup];
-  for (const button of document.querySelectorAll(".state-group-button")) {
+  for (const button of document.querySelectorAll("[data-state-group]")) {
     button.setAttribute("aria-pressed", String(button.dataset.stateGroup === currentStateGroup));
   }
   const buildRow = (label, counts, isTotal = false) => {
@@ -923,6 +954,50 @@ function renderStatusCountsByState(analysis) {
   foot.append(buildRow("Total", { completed: sumOf("completed"), cancelled: sumOf("cancelled"), pending: sumOf("pending") }, true));
 }
 
+// Quadro "Backlog por estado": agendadas (ONLINE), não agendadas e total por estado do CM.
+function renderBacklogByState(analysis) {
+  const rows = document.getElementById("state-backlog-rows");
+  const foot = document.getElementById("state-backlog-foot");
+  const stateCounts = analysis.backlogCountsByState[currentBacklogGroup];
+  rows.replaceChildren();
+  foot.replaceChildren();
+  document.getElementById("state-backlog-description").textContent = BACKLOG_GROUP_DESCRIPTIONS[currentBacklogGroup];
+  for (const button of document.querySelectorAll("[data-backlog-group]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.backlogGroup === currentBacklogGroup));
+  }
+  const buildRow = (label, counts, isTotal = false) => {
+    const row = document.createElement("tr");
+    const labelCell = document.createElement(isTotal ? "th" : "td");
+    if (isTotal) labelCell.scope = "row";
+    labelCell.className = `px-5 py-2.5 ${isTotal ? "text-[color:var(--ink)]" : "text-[color:var(--ink-4)]"}`;
+    labelCell.textContent = label;
+    row.append(labelCell);
+    for (const [key, color, padding] of [["online", "text-[color:var(--ink-3)]", "px-2"], ["unscheduled", "text-[color:var(--ink-3)]", "px-2"], ["total", "text-[color:var(--ink)]", "px-5"]]) {
+      const cell = document.createElement("td");
+      cell.className = `tabular ${padding} py-2.5 text-right font-semibold ${color}`;
+      cell.textContent = counts[key].toLocaleString("pt-BR");
+      row.append(cell);
+    }
+    return row;
+  };
+
+  if (!stateCounts.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "px-5 py-6 text-center text-sm text-[color:var(--muted)]";
+    cell.textContent = "Nenhum chamado em backlog neste grupo.";
+    row.append(cell);
+    rows.append(row);
+    return;
+  }
+  for (const item of stateCounts) {
+    rows.append(buildRow(item.location, item));
+  }
+  const sumOf = (key) => stateCounts.reduce((total, item) => total + item[key], 0);
+  foot.append(buildRow("Total", { online: sumOf("online"), unscheduled: sumOf("unscheduled"), total: sumOf("total") }, true));
+}
+
 function renderAnalysis(fullAnalysis) {
   renderTechnicianClosures(fullAnalysis);
   const analysis = getAnalysisView(fullAnalysis);
@@ -939,6 +1014,7 @@ function renderAnalysis(fullAnalysis) {
   document.getElementById("cancelled-count").textContent = analysis.cancelledCount.toLocaleString("pt-BR");
   document.getElementById("pending-count").textContent = analysis.pendingCount.toLocaleString("pt-BR");
   renderStatusCountsByState(analysis);
+  renderBacklogByState(analysis);
   document.getElementById("analyzed-sheet").textContent = analysis.sheetName;
 
   for (const priority of ["P1", "P2", "P3", "P4", "P5"]) {
@@ -1576,10 +1652,16 @@ document.getElementById("technician-groups-toggle").addEventListener("click", (e
     renderBucketChart(currentAnalysis);
   }
 });
-for (const button of document.querySelectorAll(".state-group-button")) {
+for (const button of document.querySelectorAll("[data-state-group]")) {
   button.addEventListener("click", () => {
     currentStateGroup = button.dataset.stateGroup;
     if (currentAnalysis) renderStatusCountsByState(currentAnalysis);
+  });
+}
+for (const button of document.querySelectorAll("[data-backlog-group]")) {
+  button.addEventListener("click", () => {
+    currentBacklogGroup = button.dataset.backlogGroup;
+    if (currentAnalysis) renderBacklogByState(currentAnalysis);
   });
 }
 for (const card of document.querySelectorAll(".view-card")) {
