@@ -14,7 +14,7 @@ Tudo roda no navegador: a planilha não é enviada a nenhum servidor.
 4. Se o arquivo tiver mais de uma aba, escolha a aba em **Aba para análise** (a aba `Page 1` da extração do TOA vem selecionada).
 5. Use os cards **Encerradas** e **Pendenciamentos** para alternar o status analisado nos gráficos e tabelas.
 
-Abaixo do **Volume encerrado por bucket** fica o **Aging das TSKs em backlog**: o tempo desde a Criação do NTT (coluna AS) até agora, nas mesmas faixas do Report Genesis (<1d, 1d a 3d, 3d a 5d, 5d a 10d, >10d), por estado do CM, com filtro Todas / Fila técnica / Centralizado. Embaixo, a lista das TSKs paradas há mais de 1 dia, da mais antiga para a mais recente; **Exportar aging** baixa o quadro e a lista em Excel.
+Abaixo do **Volume encerrado por bucket** fica o **Aging das TSKs em backlog**: o tempo desde a Criação do NTT (coluna AS) até agora, nas mesmas faixas do Report Genesis (<1d, 1d a 3d, 3d a 5d, 5d a 10d, >10d), por estado do CM, com filtro Todas / Fila técnica / Centralizado. Embaixo, a lista das TSKs paradas há mais de 1 dia, da mais antiga para a mais recente, filtrável por estado (no seletor ou clicando no estado do quadro; Ctrl/Cmd + clique junta mais de um estado, e clicar de novo no estado volta a mostrar todos); **Exportar aging** baixa o quadro e a lista em Excel.
 
 É preciso estar conectado à internet, porque o Tailwind CSS e a biblioteca SheetJS (leitura e geração de Excel) são carregados por CDN.
 

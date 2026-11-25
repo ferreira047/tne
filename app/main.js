@@ -141,8 +141,12 @@ let currentStateGroup = "all";
 let currentBacklogGroup = "all";
 // Quadro "Aging das TSKs em backlog": grupo escolhido nos botões do quadro.
 let currentAgingGroup = "all";
-// Filtro "Estado" da lista de TSKs paradas há mais de 1 dia ("" = todos).
-let currentAgingState = "";
+// Estados escolhidos para a lista de TSKs paradas há mais de 1 dia (vazio = todos): pelo
+// filtro "Estado" ou clicando nas linhas do quadro (Ctrl/Cmd + clique junta mais de um).
+let currentAgingStates = new Set();
+// Ctrl + clique no Mac abre o menu de contexto em vez do clique: ali o contextmenu faz a
+// seleção, e o clique que vier logo depois é ignorado.
+let agingContextToggleAt = 0;
 
 const BACKLOG_GROUP_DESCRIPTIONS = {
   all: "Chamados em backlog (agendadas em Iniciado ou Não iniciado + não agendadas, sem DSOC MONITORACAO PREDITIVA), agrupados pelo estado do CM (coluna AK).",
@@ -1680,8 +1684,16 @@ function renderBacklogAging(analysis) {
   for (const label of [...BACKLOG_AGING_LABELS, "Total"]) headRow.append(make("th", "whitespace-nowrap px-3 py-2.5 text-right font-semibold", label));
   document.getElementById("aging-pivot-head").replaceChildren(headRow);
   const buildRow = (label, counts, isTotal = false) => {
-    const row = make("tr");
-    const labelCell = make(isTotal ? "th" : "td", `px-5 py-2.5 ${isTotal ? "text-[color:var(--ink)]" : "text-[color:var(--ink-4)]"}`, label);
+    const selected = !isTotal && currentAgingStates.has(label);
+    const row = make("tr", isTotal ? "" : `cursor-pointer select-none transition ${selected ? "bg-[color:var(--green-soft)]" : "hover:bg-[color:var(--hover)]"}`);
+    if (!isTotal) {
+      row.dataset.agingState = label;
+      row.tabIndex = 0;
+      row.setAttribute("aria-selected", String(selected));
+      row.title = "Clique para ver as TSKs paradas deste estado; Ctrl + clique para juntar mais de um estado";
+    }
+    const labelCell = make(isTotal ? "th" : "td", `px-5 py-2.5 ${isTotal || selected ? "font-semibold text-[color:var(--ink)]" : "text-[color:var(--ink-4)]"}`, label);
+    if (selected) labelCell.style.boxShadow = "inset 3px 0 0 var(--green)";
     if (isTotal) labelCell.scope = "row";
     row.append(labelCell);
     for (const column of BACKLOG_AGING_LABELS) {
@@ -1705,31 +1717,35 @@ function renderBacklogAging(analysis) {
     pivotFoot.replaceChildren(buildRow("Total", aging.total, true));
   }
 
-  // Filtro por estado: só os estados com TSK parada; o escolhido some se ficar sem TSK.
+  // Filtro por estado: opções com os estados que têm TSK parada; vários estados escolhidos
+  // (Ctrl + clique no quadro) aparecem numa opção só.
   const staleByLocation = new Map();
   for (const ticket of aging.stale) staleByLocation.set(ticket.location, (staleByLocation.get(ticket.location) || 0) + 1);
-  if (!staleByLocation.has(currentAgingState)) currentAgingState = "";
-  const stateFilter = document.getElementById("aging-state-filter");
-  const allOption = make("option", "", `Todos os estados (${fmt(aging.stale.length)})`);
-  allOption.value = "";
   const locationOrder = [...TECHNICIAN_LOCATION_ORDER, "Outros"];
-  stateFilter.replaceChildren(allOption, ...[...staleByLocation]
-    .sort(([left], [right]) => locationOrder.indexOf(left) - locationOrder.indexOf(right))
-    .map(([location, count]) => {
-      const option = make("option", "", `${location} (${fmt(count)})`);
-      option.value = location;
-      return option;
-    }));
-  stateFilter.value = currentAgingState;
-  const stale = aging.stale.filter((ticket) => !currentAgingState || ticket.location === currentAgingState);
-  document.getElementById("aging-stale-description").textContent = currentAgingState
-    ? `${fmt(stale.length)} TSKs em ${currentAgingState}, da mais antiga para a mais recente.`
-    : "Da mais antiga para a mais recente.";
+  const byOrder = (left, right) => locationOrder.indexOf(left) - locationOrder.indexOf(right);
+  const selectedStates = [...currentAgingStates].sort(byOrder);
+  const stateFilter = document.getElementById("aging-state-filter");
+  const option = (value, text) => {
+    const node = make("option", "", text);
+    node.value = value;
+    return node;
+  };
+  const optionLocations = [...new Set([...staleByLocation.keys(), ...(selectedStates.length === 1 ? selectedStates : [])])].sort(byOrder);
+  stateFilter.replaceChildren(
+    option("", `Todos os estados (${fmt(aging.stale.length)})`),
+    ...(selectedStates.length > 1 ? [option("__multi__", `${selectedStates.length} estados: ${selectedStates.join(", ")}`)] : []),
+    ...optionLocations.map((location) => option(location, `${location} (${fmt(staleByLocation.get(location) || 0)})`))
+  );
+  stateFilter.value = selectedStates.length > 1 ? "__multi__" : (selectedStates[0] || "");
+  const stale = aging.stale.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  document.getElementById("aging-stale-description").textContent = selectedStates.length
+    ? `${fmt(stale.length)} TSKs em ${selectedStates.join(", ")}, da mais antiga para a mais recente.`
+    : "Da mais antiga para a mais recente. Clique num estado do quadro para filtrar (Ctrl + clique para mais de um).";
 
   const staleRows = document.getElementById("aging-stale-rows");
   if (!stale.length) {
     const row = make("tr");
-    const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", "Nenhuma TSK parada há mais de 1 dia neste grupo.");
+    const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", selectedStates.length ? `Nenhuma TSK parada há mais de 1 dia em ${selectedStates.join(", ")}.` : "Nenhuma TSK parada há mais de 1 dia neste grupo.");
     cell.colSpan = 8;
     row.append(cell);
     staleRows.replaceChildren(row);
@@ -1770,7 +1786,7 @@ function exportBacklogAging() {
     showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
     return;
   }
-  const stale = aging.stale.filter((ticket) => !currentAgingState || ticket.location === currentAgingState);
+  const stale = aging.stale.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
   const workbook = XLSX.utils.book_new();
   const pivotSheet = XLSX.utils.aoa_to_sheet([
     ["Estado", ...BACKLOG_AGING_LABELS, "Total"],
@@ -1799,7 +1815,8 @@ function exportBacklogAging() {
   staleSheet["!cols"] = [16, 22, 14, 14, 40, 24, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, staleSheet, "Mais de 1 dia");
   const groupSuffix = { all: "todas", technician: "fila-tecnica", commandCenter: "centralizado" }[currentAgingGroup];
-  const stateSuffix = currentAgingState ? `-${normalizeText(currentAgingState).replace(/\s+/g, "-")}` : "";
+  const stateSuffix = currentAgingStates.size === 1 ? `-${normalizeText([...currentAgingStates][0]).replace(/\s+/g, "-")}`
+    : currentAgingStates.size > 1 ? `-${currentAgingStates.size}-estados` : "";
   XLSX.writeFile(workbook, `aging-backlog-${groupSuffix}${stateSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
   showFeedback(`Aging exportado: ${stale.length.toLocaleString("pt-BR")} TSKs paradas há mais de 1 dia.`, "success");
 }
@@ -1981,7 +1998,7 @@ function clearAnalysis() {
   currentAnalysis = null;
   currentStateGroup = "all";
   currentAgingGroup = "all";
-  currentAgingState = "";
+  currentAgingStates = new Set();
   setView("completed");
   results.classList.add("hidden");
   clearButton.classList.add("hidden");
@@ -2054,8 +2071,41 @@ for (const button of document.querySelectorAll("[data-aging-group]")) {
   });
 }
 document.getElementById("aging-state-filter").addEventListener("change", (event) => {
-  currentAgingState = event.target.value;
+  if (event.target.value === "__multi__") return;
+  currentAgingStates = new Set(event.target.value ? [event.target.value] : []);
   if (currentAnalysis) renderBacklogAging(currentAnalysis);
+});
+// Clique num estado do quadro de aging: mostra só ele na lista (clicar de novo volta a todos).
+// Ctrl/Cmd + clique junta ou tira o estado da seleção.
+function selectAgingState(state, additive) {
+  if (additive) {
+    if (currentAgingStates.has(state)) currentAgingStates.delete(state);
+    else currentAgingStates.add(state);
+  } else {
+    currentAgingStates = currentAgingStates.size === 1 && currentAgingStates.has(state) ? new Set() : new Set([state]);
+  }
+  if (!currentAnalysis) return;
+  renderBacklogAging(currentAnalysis);
+  document.querySelector(`#aging-pivot-rows [data-aging-state="${CSS.escape(state)}"]`)?.focus({ preventScroll: true });
+}
+const agingPivotRows = document.getElementById("aging-pivot-rows");
+agingPivotRows.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-aging-state]");
+  if (!row || Date.now() - agingContextToggleAt < 600) return;
+  selectAgingState(row.dataset.agingState, event.ctrlKey || event.metaKey);
+});
+agingPivotRows.addEventListener("contextmenu", (event) => {
+  const row = event.target.closest("[data-aging-state]");
+  if (!row || !event.ctrlKey) return;
+  event.preventDefault();
+  agingContextToggleAt = Date.now();
+  selectAgingState(row.dataset.agingState, true);
+});
+agingPivotRows.addEventListener("keydown", (event) => {
+  const row = event.target.closest("[data-aging-state]");
+  if (!row || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  selectAgingState(row.dataset.agingState, event.ctrlKey || event.metaKey);
 });
 for (const card of document.querySelectorAll(".view-card")) {
   card.addEventListener("click", () => {
