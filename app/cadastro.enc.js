@@ -32,6 +32,12 @@ const CADASTRO_CRIPTOGRAFADO = {
       "iv": "FOThaVYyQMI1sP3e",
       "chave": "421BhvCqUrqXLRn8/t3VWlsAv5FzZwFMcMFvjywbCO/Jy6Sfqi8axwnnFATqYJHS",
       "grupo": "admin-extra"
+    },
+    "cristina@tlp.com": {
+      "perfil": "genesis",
+      "salt": "90ZpYnk/7bXwI8iLXzb7eQ==",
+      "iv": "wustNU6zlzpcznkI",
+      "chave": "3ZSDaQgBkouUVVkD66z3og0rkkXi/DY="
     }
   },
   "iv": "R0b5SXGu9FaS5CZ3",
