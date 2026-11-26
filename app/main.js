@@ -154,6 +154,50 @@ let currentAgingPriorities = new Set();
 // Ordenação da lista do aging: "days" (mais antiga primeiro) ou "cm" (CM A–Z, depois mais antiga).
 let currentAgingSort = "days";
 
+// Botão "Sem 2G" do aging: tira as TSKs cujo NE ID é 2G na base do Genesis (extração do Painel
+// Online, a mesma anexada em genesis.html). Tecnologia = 1º caractere da coluna "tecnologia" + "G",
+// como no Report Genesis. Um site conta como 2G quando, no Genesis, só aparece com 2G.
+const GENESIS_BASE_KEY = "reportFilaTecTNE.genesis";
+let agingHide2G = false;
+let genesisBase = null; // { fileName, sites2G: Set, siteCount }
+
+function genesisSiteKey(value) {
+  return String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+async function readGenesisBase(file) {
+  const workbook = /\.csv$/i.test(file.name)
+    ? XLSX.read(new TextDecoder("utf-8").decode(await file.arrayBuffer()), { type: "string", raw: true })
+    : XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: true, blankrows: false });
+    const headerIndex = rows.slice(0, 30).findIndex((row) => row.some((cell) => normalizeText(cell) === "horario"));
+    if (headerIndex < 0) continue;
+    const header = rows[headerIndex].map(normalizeText);
+    const siteIndex = header.indexOf("site");
+    const techIndex = header.indexOf("tecnologia");
+    if (siteIndex < 0 || techIndex < 0) continue;
+    const techsBySite = new Map();
+    for (const row of rows.slice(headerIndex + 1)) {
+      const site = genesisSiteKey(row[siteIndex]);
+      const first = String(row[techIndex] ?? "").trim().charAt(0).toUpperCase();
+      if (!site || !first) continue;
+      if (!techsBySite.has(site)) techsBySite.set(site, new Set());
+      techsBySite.get(site).add(`${first}G`);
+    }
+    const sites2G = new Set([...techsBySite].filter(([, techs]) => techs.size === 1 && techs.has("2G")).map(([site]) => site));
+    return { fileName: file.name, sites2G, siteCount: techsBySite.size };
+  }
+  throw new Error('Não achei as colunas "horario", "site" e "tecnologia". Anexe a extração do Painel Online do Genesis.');
+}
+
+// NE ID igual ao site do Genesis; também tenta sem prefixo de tecnologia ("4G-STFS01" → "STFS01").
+function isGenesis2G(ticket) {
+  if (!genesisBase) return false;
+  const key = genesisSiteKey(ticket.site);
+  return genesisBase.sites2G.has(key) || genesisBase.sites2G.has(key.replace(/^[2-5]G[-_]/, ""));
+}
+
 // Aplica a ordenação escolhida à lista do aging (a entrada já vem da mais antiga para a mais recente).
 function sortAgingList(tickets) {
   if (currentAgingSort !== "cm") return tickets;
@@ -1668,6 +1712,7 @@ function buildBacklogAging(analysis, now = new Date()) {
   const tickets = analysis.backlogTickets
     .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
     .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
+    .filter((ticket) => !agingHide2G || !isGenesis2G(ticket))
     .map((ticket) => {
       const created = parseNttCreated(ticket.createdAt);
       const days = created ? Math.max(0, (now - created) / 86400000) : null;
@@ -1761,6 +1806,16 @@ function renderBacklogAging(analysis) {
   const listTickets = agingStaleOnly ? aging.stale : aging.sorted;
   const staleOnlyButton = document.getElementById("aging-stale-only-button");
   staleOnlyButton.setAttribute("aria-pressed", String(agingStaleOnly));
+  document.getElementById("aging-hide-2g-button").setAttribute("aria-pressed", String(agingHide2G));
+  const info2G = document.getElementById("aging-2g-info");
+  if (agingHide2G && genesisBase) {
+    const removed = analysis.backlogTickets
+      .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
+      .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
+      .filter(isGenesis2G).length;
+    info2G.textContent = `Sem 2G: ${fmt(removed)} TSKs de sites 2G retiradas (base Genesis: ${genesisBase.fileName}, ${fmt(genesisBase.sites2G.size)} sites só 2G).`;
+  }
+  info2G.classList.toggle("hidden", !(agingHide2G && genesisBase));
   for (const button of document.querySelectorAll("[data-aging-priority]")) {
     button.setAttribute("aria-pressed", String(currentAgingPriorities.has(button.dataset.agingPriority)));
   }
@@ -2136,6 +2191,47 @@ for (const button of document.querySelectorAll("[data-aging-group]")) {
     currentAgingGroup = button.dataset.agingGroup;
     if (currentAnalysis) renderBacklogAging(currentAnalysis);
   });
+}
+// "Sem 2G": usa a base do Genesis guardada nesta aba (aberta em genesis.html); sem ela, pede o arquivo.
+const genesisBaseInput = document.getElementById("aging-genesis-input");
+async function useGenesisBase(file, fromShared = false) {
+  if (!window.XLSX) {
+    showFeedback("Não foi possível carregar o leitor de planilhas. Verifique sua conexão e recarregue a página.");
+    return false;
+  }
+  try {
+    genesisBase = await readGenesisBase(file);
+    if (!fromShared) saveSharedFile(file, GENESIS_BASE_KEY);
+    return true;
+  } catch (error) {
+    genesisBase = null;
+    if (!fromShared) showFeedback(`Base do Genesis inválida. ${error.message || ""}`.trim());
+    return false;
+  }
+}
+document.getElementById("aging-hide-2g-button").addEventListener("click", () => {
+  if (agingHide2G) {
+    agingHide2G = false;
+  } else if (genesisBase) {
+    agingHide2G = true;
+  } else {
+    genesisBaseInput.click();
+    return;
+  }
+  if (currentAnalysis) renderBacklogAging(currentAnalysis);
+});
+genesisBaseInput.addEventListener("change", async () => {
+  const file = genesisBaseInput.files?.[0];
+  genesisBaseInput.value = "";
+  if (!file) return;
+  if (await useGenesisBase(file)) {
+    agingHide2G = true;
+    if (currentAnalysis) renderBacklogAging(currentAnalysis);
+  }
+});
+{
+  const storedGenesis = loadSharedFile(GENESIS_BASE_KEY);
+  if (storedGenesis) useGenesisBase(storedGenesis, true);
 }
 document.getElementById("aging-stale-only-button").addEventListener("click", () => {
   agingStaleOnly = !agingStaleOnly;
