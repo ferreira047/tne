@@ -192,10 +192,16 @@ async function readGenesisBase(file) {
   throw new Error('Não achei as colunas "horario", "site" e "tecnologia". Anexe a extração do Painel Online do Genesis.');
 }
 
+// Coluna "Tipo de NE" (ED) da planilha de atividades: tipos que contam como 2G.
+// (BTS = 2G; BSC = controladora 2G; M-MGW = central de voz 2G, ex.: KSDR04.)
+const NE_TYPES_2G = new Set(["BTS", "BSC", "M-MGW"]);
+
 // Só a TSK do 2G sai; as de 3G/4G/5G do mesmo END_ID continuam.
-// · NE ID com prefixo de tecnologia vale por ele: "4G-STFS01" fica (é a TSK do 4G), "2G-…" sai;
-// · NE ID sem prefixo ("STFS01") sai quando o site tem caso 2G no Genesis.
+// 1. Com "Tipo de NE" preenchido, vale ele (o Genesis só traz sites com alarme ativo agora);
+// 2. sem ele, NE ID com prefixo de tecnologia vale pelo prefixo: "4G-STFS01" fica, "2G-…" sai;
+// 3. NE ID sem prefixo ("STFS01") sai quando o site tem caso 2G no Genesis.
 function isGenesis2G(ticket) {
+  if (ticket.neType) return NE_TYPES_2G.has(ticket.neType.toUpperCase());
   if (!genesisBase) return false;
   const key = genesisSiteKey(ticket.site);
   const prefix = key.match(/^([2-5])G[-_]/);
@@ -582,6 +588,7 @@ function analyzeSelectedSheet() {
     const headerIndex = (name) => (rows[0] || []).findIndex((cell) => normalizeText(cell) === normalizeText(name));
     const neIdIndex = headerIndex("NE ID");
     const endIdIndex = headerIndex("END_ID");
+    const neTypeIndex = headerIndex("Tipo de NE");
     if (isScheduledSheet(rows) === !scheduled) {
       const other = Object.values(SOURCES).find((source) => source.scheduled !== scheduled);
       const fileName = slot.fileName;
@@ -639,7 +646,8 @@ function analyzeSelectedSheet() {
         status: String(row[statusIndex] ?? "").trim(),
         priority: String(row[priorityIndex] ?? "").trim(),
         createdAt: String(row[nttCreatedIndex] ?? "").trim(),
-        site: String(row[neIdIndex] ?? "").trim() || String(row[endIdIndex] ?? "").trim()
+        site: String(row[neIdIndex] ?? "").trim() || String(row[endIdIndex] ?? "").trim(),
+        neType: neTypeIndex >= 0 ? String(row[neTypeIndex] ?? "").trim() : ""
       });
     }
     entrantsBySource[slot.key] = countTickets(sourceRows.filter((row) => isCreatedToday(row[nttCreatedIndex])));
@@ -1813,14 +1821,15 @@ function renderBacklogAging(analysis) {
   staleOnlyButton.setAttribute("aria-pressed", String(agingStaleOnly));
   document.getElementById("aging-hide-2g-button").setAttribute("aria-pressed", String(agingHide2G));
   const info2G = document.getElementById("aging-2g-info");
-  if (agingHide2G && genesisBase) {
+  if (agingHide2G) {
     const removed = analysis.backlogTickets
       .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
       .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
       .filter(isGenesis2G).length;
-    info2G.textContent = `Sem 2G: ${fmt(removed)} TSKs de sites 2G retiradas (base Genesis: ${genesisBase.fileName}, ${fmt(genesisBase.sites2G.size)} sites com 2G).`;
+    const genesisText = genesisBase ? `; sem tipo, base Genesis ${genesisBase.fileName}` : "";
+    info2G.textContent = `Sem 2G: ${fmt(removed)} TSKs 2G retiradas (Tipo de NE BTS, BSC ou M-MGW${genesisText}).`;
   }
-  info2G.classList.toggle("hidden", !(agingHide2G && genesisBase));
+  info2G.classList.toggle("hidden", !agingHide2G);
   for (const button of document.querySelectorAll("[data-aging-priority]")) {
     button.setAttribute("aria-pressed", String(currentAgingPriorities.has(button.dataset.agingPriority)));
   }
@@ -2217,7 +2226,8 @@ async function useGenesisBase(file, fromShared = false) {
 document.getElementById("aging-hide-2g-button").addEventListener("click", () => {
   if (agingHide2G) {
     agingHide2G = false;
-  } else if (genesisBase) {
+  } else if (genesisBase || currentAnalysis?.backlogTickets.some((ticket) => ticket.neType)) {
+    // Com a coluna "Tipo de NE" na planilha, o Genesis só completa as TSKs sem tipo.
     agingHide2G = true;
   } else {
     genesisBaseInput.click();
