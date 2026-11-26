@@ -151,6 +151,19 @@ let agingContextToggleAt = 0;
 let agingStaleOnly = false;
 // Botões de prioridade do quadro de aging (vazio = todas; vários podem ficar ligados).
 let currentAgingPriorities = new Set();
+// Ordenação da lista do aging: "days" (mais antiga primeiro) ou "cm" (CM A–Z, depois mais antiga).
+let currentAgingSort = "days";
+
+// Aplica a ordenação escolhida à lista do aging (a entrada já vem da mais antiga para a mais recente).
+function sortAgingList(tickets) {
+  if (currentAgingSort !== "cm") return tickets;
+  return [...tickets].sort((left, right) => {
+    const leftCm = String(left.cm || "").trim();
+    const rightCm = String(right.cm || "").trim();
+    if (!leftCm !== !rightCm) return leftCm ? -1 : 1;
+    return leftCm.localeCompare(rightCm, "pt-BR", { sensitivity: "base" }) || (right.days ?? -1) - (left.days ?? -1);
+  });
+}
 
 const BACKLOG_GROUP_DESCRIPTIONS = {
   all: "Chamados em backlog (agendadas em Iniciado ou Não iniciado + não agendadas, sem DSOC MONITORACAO PREDITIVA), agrupados pelo estado do CM (coluna AK).",
@@ -1773,15 +1786,17 @@ function renderBacklogAging(analysis) {
     ...optionLocations.map((location) => option(location, `${location} (${fmt(staleByLocation.get(location) || 0)})`))
   );
   stateFilter.value = selectedStates.length > 1 ? "__multi__" : (selectedStates[0] || "");
-  const stale = listTickets.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  const stale = sortAgingList(listTickets.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location)));
+  document.getElementById("aging-sort").value = currentAgingSort;
+  const orderText = currentAgingSort === "cm" ? "ordenadas por CM" : "da mais antiga para a mais recente";
   const selectedPriorities = BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority));
   const scope = [
     selectedStates.length ? `em ${selectedStates.join(", ")}` : "",
     selectedPriorities.length ? `com ${selectedPriorities.join(", ")}` : ""
   ].filter(Boolean).join(" ");
   document.getElementById("aging-stale-description").textContent = scope
-    ? `${fmt(stale.length)} TSKs ${scope}, da mais antiga para a mais recente.`
-    : "Da mais antiga para a mais recente. Clique num estado do quadro para filtrar (Ctrl + clique para mais de um).";
+    ? `${fmt(stale.length)} TSKs ${scope}, ${orderText}.`
+    : `${orderText.charAt(0).toUpperCase()}${orderText.slice(1)}. Clique num estado do quadro para filtrar (Ctrl + clique para mais de um).`;
 
   const staleRows = document.getElementById("aging-stale-rows");
   if (!stale.length) {
@@ -1807,7 +1822,7 @@ function renderBacklogAging(analysis) {
       textCell(ticket.tsk, "font-semibold text-[color:var(--ink)] sm:pl-5"),
       textCell(ticket.site, "text-[color:var(--ink-2)]"),
       textCell(ticket.location, "text-[color:var(--ink-4)]"),
-      textCell(ticket.bucket, "text-[color:var(--ink-4)]", [ticket.bucket, ticket.cm].filter(Boolean).join(" · ")),
+      textCell(ticket.cm, "text-[color:var(--ink-4)]", [ticket.cm, ticket.bucket].filter(Boolean).join(" · ")),
       textCell(ticket.status, "hidden text-[color:var(--ink-4)] lg:table-cell"),
       textCell(priority, `font-semibold ${BACKLOG_PRIORITY_TONES[priority] || "text-[color:var(--ink-3)]"}`),
       textCell(ticket.source === "Não agendadas" ? "Não agend." : ticket.source, "hidden text-[color:var(--ink-4)] lg:table-cell", ticket.source),
@@ -1832,8 +1847,8 @@ function exportBacklogAging() {
     showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
     return;
   }
-  const stale = (agingStaleOnly ? aging.stale : aging.sorted)
-    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  const stale = sortAgingList((agingStaleOnly ? aging.stale : aging.sorted)
+    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location)));
   const workbook = XLSX.utils.book_new();
   const columns = agingColumns();
   const pivotSheet = XLSX.utils.aoa_to_sheet([
@@ -2135,6 +2150,10 @@ for (const button of document.querySelectorAll("[data-aging-priority]")) {
     if (currentAnalysis) renderBacklogAging(currentAnalysis);
   });
 }
+document.getElementById("aging-sort").addEventListener("change", (event) => {
+  currentAgingSort = event.target.value === "cm" ? "cm" : "days";
+  if (currentAnalysis) renderBacklogAging(currentAnalysis);
+});
 document.getElementById("aging-state-filter").addEventListener("change", (event) => {
   if (event.target.value === "__multi__") return;
   currentAgingStates = new Set(event.target.value ? [event.target.value] : []);
