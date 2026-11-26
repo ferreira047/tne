@@ -147,6 +147,8 @@ let currentAgingStates = new Set();
 // Ctrl + clique no Mac abre o menu de contexto em vez do clique: ali o contextmenu faz a
 // seleção, e o clique que vier logo depois é ignorado.
 let agingContextToggleAt = 0;
+// Botão "Só mais de 1 dia": a lista mostra só as TSKs paradas há mais de 1 dia.
+let agingStaleOnly = false;
 
 const BACKLOG_GROUP_DESCRIPTIONS = {
   all: "Chamados em backlog (agendadas em Iniciado ou Não iniciado + não agendadas, sem DSOC MONITORACAO PREDITIVA), agrupados pelo estado do CM (coluna AK).",
@@ -1617,6 +1619,8 @@ const BACKLOG_AGING_TONES = {
 };
 // "Parada há mais de 1 dia": a partir de 24 h desde a Criação do NTT.
 const BACKLOG_STALE_DAYS = 1;
+// Prioridade (coluna GI): P1 e P2 em destaque na lista.
+const BACKLOG_PRIORITY_TONES = { P1: "text-[color:var(--red)]", P2: "text-[color:var(--orange)]" };
 
 // Aceita "17/11/2026 08:00:00", "17/11/2026 08:00" e "17/11/26" (sem hora vale 00:00).
 function parseNttCreated(value) {
@@ -1633,7 +1637,7 @@ function formatStaleTime(days) {
   return hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h`;
 }
 
-// Estado × aging do grupo escolhido, mais a lista das TSKs paradas há mais de 1 dia.
+// Estado × aging do grupo escolhido, mais a lista das TSKs (todas e só as paradas há mais de 1 dia).
 function buildBacklogAging(analysis, now = new Date()) {
   const tickets = analysis.backlogTickets
     .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
@@ -1655,8 +1659,9 @@ function buildBacklogAging(analysis, now = new Date()) {
   }
   const locationOrder = [...TECHNICIAN_LOCATION_ORDER, "Outros"];
   const rows = [...byLocation].sort(([left], [right]) => locationOrder.indexOf(left) - locationOrder.indexOf(right));
-  const stale = tickets.filter((ticket) => ticket.days !== null && ticket.days >= BACKLOG_STALE_DAYS).sort((left, right) => right.days - left.days);
-  return { now, tickets, rows, total, stale, noDate: tickets.filter((ticket) => !ticket.aging).length };
+  const sorted = [...tickets].sort((left, right) => (right.days ?? -1) - (left.days ?? -1));
+  const stale = sorted.filter((ticket) => ticket.days !== null && ticket.days >= BACKLOG_STALE_DAYS);
+  return { now, tickets, sorted, rows, total, stale, noDate: tickets.filter((ticket) => !ticket.aging).length };
 }
 
 function renderBacklogAging(analysis) {
@@ -1717,10 +1722,16 @@ function renderBacklogAging(analysis) {
     pivotFoot.replaceChildren(buildRow("Total", aging.total, true));
   }
 
-  // Filtro por estado: opções com os estados que têm TSK parada; vários estados escolhidos
+  // Lista: todo o backlog ou, com o botão "Só mais de 1 dia", só as paradas há mais de 1 dia.
+  const listTickets = agingStaleOnly ? aging.stale : aging.sorted;
+  const staleOnlyButton = document.getElementById("aging-stale-only-button");
+  staleOnlyButton.setAttribute("aria-pressed", String(agingStaleOnly));
+  document.getElementById("aging-list-title").textContent = agingStaleOnly ? "Paradas há mais de 1 dia" : "Todo o backlog";
+
+  // Filtro por estado: opções com os estados que têm TSK na lista; vários estados escolhidos
   // (Ctrl + clique no quadro) aparecem numa opção só.
   const staleByLocation = new Map();
-  for (const ticket of aging.stale) staleByLocation.set(ticket.location, (staleByLocation.get(ticket.location) || 0) + 1);
+  for (const ticket of listTickets) staleByLocation.set(ticket.location, (staleByLocation.get(ticket.location) || 0) + 1);
   const locationOrder = [...TECHNICIAN_LOCATION_ORDER, "Outros"];
   const byOrder = (left, right) => locationOrder.indexOf(left) - locationOrder.indexOf(right);
   const selectedStates = [...currentAgingStates].sort(byOrder);
@@ -1732,12 +1743,12 @@ function renderBacklogAging(analysis) {
   };
   const optionLocations = [...new Set([...staleByLocation.keys(), ...(selectedStates.length === 1 ? selectedStates : [])])].sort(byOrder);
   stateFilter.replaceChildren(
-    option("", `Todos os estados (${fmt(aging.stale.length)})`),
+    option("", `Todos os estados (${fmt(listTickets.length)})`),
     ...(selectedStates.length > 1 ? [option("__multi__", `${selectedStates.length} estados: ${selectedStates.join(", ")}`)] : []),
     ...optionLocations.map((location) => option(location, `${location} (${fmt(staleByLocation.get(location) || 0)})`))
   );
   stateFilter.value = selectedStates.length > 1 ? "__multi__" : (selectedStates[0] || "");
-  const stale = aging.stale.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  const stale = listTickets.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
   document.getElementById("aging-stale-description").textContent = selectedStates.length
     ? `${fmt(stale.length)} TSKs em ${selectedStates.join(", ")}, da mais antiga para a mais recente.`
     : "Da mais antiga para a mais recente. Clique num estado do quadro para filtrar (Ctrl + clique para mais de um).";
@@ -1745,8 +1756,9 @@ function renderBacklogAging(analysis) {
   const staleRows = document.getElementById("aging-stale-rows");
   if (!stale.length) {
     const row = make("tr");
-    const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", selectedStates.length ? `Nenhuma TSK parada há mais de 1 dia em ${selectedStates.join(", ")}.` : "Nenhuma TSK parada há mais de 1 dia neste grupo.");
-    cell.colSpan = 8;
+    const what = agingStaleOnly ? "Nenhuma TSK parada há mais de 1 dia" : "Nenhuma TSK em backlog";
+    const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", selectedStates.length ? `${what} em ${selectedStates.join(", ")}.` : `${what} neste grupo.`);
+    cell.colSpan = 9;
     row.append(cell);
     staleRows.replaceChildren(row);
     return;
@@ -1760,21 +1772,24 @@ function renderBacklogAging(analysis) {
   };
   staleRows.replaceChildren(...stale.map((ticket) => {
     const row = make("tr", "hover:bg-[color:var(--hover)]");
+    const priority = ticket.priority.toUpperCase();
     row.append(
       textCell(ticket.tsk, "font-semibold text-[color:var(--ink)] sm:pl-5"),
       textCell(ticket.location, "text-[color:var(--ink-4)]"),
       textCell(ticket.bucket, "text-[color:var(--ink-4)]", [ticket.bucket, ticket.cm].filter(Boolean).join(" · ")),
       textCell(ticket.status, "hidden text-[color:var(--ink-4)] lg:table-cell"),
+      textCell(priority, `font-semibold ${BACKLOG_PRIORITY_TONES[priority] || "text-[color:var(--ink-3)]"}`),
       textCell(ticket.source, "hidden text-[color:var(--ink-4)] lg:table-cell"),
       textCell(ticket.createdAt.replace(/^(\d{1,2}\/\d{1,2})\/\d{2,4}\s+(\d{1,2}:\d{2}).*$/, "$1 $2"), "tabular hidden text-[color:var(--ink-4)] md:table-cell", ticket.createdAt),
-      textCell(formatStaleTime(ticket.days), "tabular text-right font-semibold text-[color:var(--ink)]", ""),
-      textCell(ticket.aging, `font-semibold sm:pr-5 ${BACKLOG_AGING_TONES[ticket.aging]}`)
+      textCell(ticket.days === null ? "" : formatStaleTime(ticket.days), "tabular text-right font-semibold text-[color:var(--ink)]", ""),
+      textCell(ticket.aging || "Sem data", `font-semibold sm:pr-5 ${BACKLOG_AGING_TONES[ticket.aging] || "text-[color:var(--muted)]"}`)
     );
     return row;
   }));
 }
 
-// Planilha do aging (grupo selecionado): aba "Aging por estado" e aba "Mais de 1 dia".
+// Planilha do aging (grupo selecionado): aba "Aging por estado" e aba com a lista exibida
+// (todo o backlog ou só as paradas há mais de 1 dia, conforme o botão).
 function exportBacklogAging() {
   if (!currentAnalysis) return;
   if (!window.XLSX?.utils?.book_new || !window.XLSX?.utils?.aoa_to_sheet || !window.XLSX?.writeFile) {
@@ -1786,7 +1801,7 @@ function exportBacklogAging() {
     showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
     return;
   }
-  const stale = aging.stale.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  const stale = (agingStaleOnly ? aging.stale : aging.sorted).filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
   const workbook = XLSX.utils.book_new();
   const pivotSheet = XLSX.utils.aoa_to_sheet([
     ["Estado", ...BACKLOG_AGING_LABELS, "Total"],
@@ -1805,20 +1820,21 @@ function exportBacklogAging() {
       ticket.bucket,
       ticket.cm,
       ticket.status,
-      ticket.priority,
+      ticket.priority.toUpperCase(),
       ticket.createdAt,
-      formatStaleTime(ticket.days),
-      Math.round(ticket.days * 10) / 10,
-      ticket.aging
+      ticket.days === null ? "" : formatStaleTime(ticket.days),
+      ticket.days === null ? "" : Math.round(ticket.days * 10) / 10,
+      ticket.aging || "Sem data"
     ])
   ]);
   staleSheet["!cols"] = [16, 22, 14, 14, 40, 24, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
-  XLSX.utils.book_append_sheet(workbook, staleSheet, "Mais de 1 dia");
+  XLSX.utils.book_append_sheet(workbook, staleSheet, agingStaleOnly ? "Mais de 1 dia" : "Backlog");
   const groupSuffix = { all: "todas", technician: "fila-tecnica", commandCenter: "centralizado" }[currentAgingGroup];
   const stateSuffix = currentAgingStates.size === 1 ? `-${normalizeText([...currentAgingStates][0]).replace(/\s+/g, "-")}`
     : currentAgingStates.size > 1 ? `-${currentAgingStates.size}-estados` : "";
-  XLSX.writeFile(workbook, `aging-backlog-${groupSuffix}${stateSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
-  showFeedback(`Aging exportado: ${stale.length.toLocaleString("pt-BR")} TSKs paradas há mais de 1 dia.`, "success");
+  const listSuffix = agingStaleOnly ? "-mais-de-1-dia" : "";
+  XLSX.writeFile(workbook, `aging-backlog-${groupSuffix}${stateSuffix}${listSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showFeedback(`Aging exportado: ${stale.length.toLocaleString("pt-BR")} TSKs ${agingStaleOnly ? "paradas há mais de 1 dia" : "em backlog"}.`, "success");
 }
 
 // Planilha com as TSKs do backlog (grupo selecionado): aba "Todas" e uma aba por estado.
@@ -1999,6 +2015,7 @@ function clearAnalysis() {
   currentStateGroup = "all";
   currentAgingGroup = "all";
   currentAgingStates = new Set();
+  agingStaleOnly = false;
   setView("completed");
   results.classList.add("hidden");
   clearButton.classList.add("hidden");
@@ -2070,6 +2087,10 @@ for (const button of document.querySelectorAll("[data-aging-group]")) {
     if (currentAnalysis) renderBacklogAging(currentAnalysis);
   });
 }
+document.getElementById("aging-stale-only-button").addEventListener("click", () => {
+  agingStaleOnly = !agingStaleOnly;
+  if (currentAnalysis) renderBacklogAging(currentAnalysis);
+});
 document.getElementById("aging-state-filter").addEventListener("change", (event) => {
   if (event.target.value === "__multi__") return;
   currentAgingStates = new Set(event.target.value ? [event.target.value] : []);
