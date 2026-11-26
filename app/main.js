@@ -156,7 +156,8 @@ let currentAgingSort = "days";
 
 // Botão "Sem 2G" do aging: tira as TSKs cujo NE ID é 2G na base do Genesis (extração do Painel
 // Online, a mesma anexada em genesis.html). Tecnologia = 1º caractere da coluna "tecnologia" + "G",
-// como no Report Genesis. Um site conta como 2G quando, no Genesis, só aparece com 2G.
+// como no Report Genesis. Um site conta como 2G quando tem qualquer caso 2G no Genesis;
+// a regra de qual TSK sai está em isGenesis2G.
 const GENESIS_BASE_KEY = "reportFilaTecTNE.genesis";
 let agingHide2G = false;
 let genesisBase = null; // { fileName, sites2G: Set, siteCount }
@@ -185,17 +186,21 @@ async function readGenesisBase(file) {
       if (!techsBySite.has(site)) techsBySite.set(site, new Set());
       techsBySite.get(site).add(`${first}G`);
     }
-    const sites2G = new Set([...techsBySite].filter(([, techs]) => techs.size === 1 && techs.has("2G")).map(([site]) => site));
+    const sites2G = new Set([...techsBySite].filter(([, techs]) => techs.has("2G")).map(([site]) => site));
     return { fileName: file.name, sites2G, siteCount: techsBySite.size };
   }
   throw new Error('Não achei as colunas "horario", "site" e "tecnologia". Anexe a extração do Painel Online do Genesis.');
 }
 
-// NE ID igual ao site do Genesis; também tenta sem prefixo de tecnologia ("4G-STFS01" → "STFS01").
+// Só a TSK do 2G sai; as de 3G/4G/5G do mesmo END_ID continuam.
+// · NE ID com prefixo de tecnologia vale por ele: "4G-STFS01" fica (é a TSK do 4G), "2G-…" sai;
+// · NE ID sem prefixo ("STFS01") sai quando o site tem caso 2G no Genesis.
 function isGenesis2G(ticket) {
   if (!genesisBase) return false;
   const key = genesisSiteKey(ticket.site);
-  return genesisBase.sites2G.has(key) || genesisBase.sites2G.has(key.replace(/^[2-5]G[-_]/, ""));
+  const prefix = key.match(/^([2-5])G[-_]/);
+  if (prefix) return prefix[1] === "2";
+  return genesisBase.sites2G.has(key);
 }
 
 // Aplica a ordenação escolhida à lista do aging (a entrada já vem da mais antiga para a mais recente).
@@ -1813,7 +1818,7 @@ function renderBacklogAging(analysis) {
       .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
       .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
       .filter(isGenesis2G).length;
-    info2G.textContent = `Sem 2G: ${fmt(removed)} TSKs de sites 2G retiradas (base Genesis: ${genesisBase.fileName}, ${fmt(genesisBase.sites2G.size)} sites só 2G).`;
+    info2G.textContent = `Sem 2G: ${fmt(removed)} TSKs de sites 2G retiradas (base Genesis: ${genesisBase.fileName}, ${fmt(genesisBase.sites2G.size)} sites com 2G).`;
   }
   info2G.classList.toggle("hidden", !(agingHide2G && genesisBase));
   for (const button of document.querySelectorAll("[data-aging-priority]")) {
