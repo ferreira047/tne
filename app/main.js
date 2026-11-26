@@ -1649,8 +1649,10 @@ function buildBacklogAging(analysis, now = new Date()) {
   const emptyCounts = () => ({ ...Object.fromEntries(BACKLOG_AGING_LABELS.map((label) => [label, 0])), total: 0 });
   const byLocation = new Map();
   const total = emptyCounts();
+  // Com "Só mais de 1 dia", o quadro conta só as TSKs paradas há mais de 1 dia.
+  const columns = agingColumns();
   for (const ticket of tickets) {
-    if (!ticket.aging) continue;
+    if (!ticket.aging || !columns.includes(ticket.aging)) continue;
     if (!byLocation.has(ticket.location)) byLocation.set(ticket.location, emptyCounts());
     for (const counts of [byLocation.get(ticket.location), total]) {
       counts[ticket.aging] += 1;
@@ -1662,6 +1664,11 @@ function buildBacklogAging(analysis, now = new Date()) {
   const sorted = [...tickets].sort((left, right) => (right.days ?? -1) - (left.days ?? -1));
   const stale = sorted.filter((ticket) => ticket.days !== null && ticket.days >= BACKLOG_STALE_DAYS);
   return { now, tickets, sorted, rows, total, stale, noDate: tickets.filter((ticket) => !ticket.aging).length };
+}
+
+// Faixas exibidas no quadro: sem "<1d" quando o botão "Só mais de 1 dia" está ligado.
+function agingColumns() {
+  return agingStaleOnly ? BACKLOG_AGING_BUCKETS.filter(({ maxDays }) => maxDays > BACKLOG_STALE_DAYS).map(({ label }) => label) : BACKLOG_AGING_LABELS;
 }
 
 function renderBacklogAging(analysis) {
@@ -1686,7 +1693,8 @@ function renderBacklogAging(analysis) {
 
   const headRow = make("tr");
   headRow.append(make("th", "px-5 py-2.5 font-semibold", "Estado"));
-  for (const label of [...BACKLOG_AGING_LABELS, "Total"]) headRow.append(make("th", "whitespace-nowrap px-3 py-2.5 text-right font-semibold", label));
+  const columns = agingColumns();
+  for (const label of [...columns, "Total"]) headRow.append(make("th", "whitespace-nowrap px-3 py-2.5 text-right font-semibold", label));
   document.getElementById("aging-pivot-head").replaceChildren(headRow);
   const buildRow = (label, counts, isTotal = false) => {
     const selected = !isTotal && currentAgingStates.has(label);
@@ -1701,7 +1709,7 @@ function renderBacklogAging(analysis) {
     if (selected) labelCell.style.boxShadow = "inset 3px 0 0 var(--green)";
     if (isTotal) labelCell.scope = "row";
     row.append(labelCell);
-    for (const column of BACKLOG_AGING_LABELS) {
+    for (const column of columns) {
       const count = counts[column];
       row.append(make("td", `tabular px-3 py-2.5 text-right ${count ? `font-semibold ${BACKLOG_AGING_TONES[column]}` : "text-[color:var(--faint)]"}`, count ? fmt(count) : "–"));
     }
@@ -1713,7 +1721,7 @@ function renderBacklogAging(analysis) {
   if (!aging.rows.length) {
     const row = make("tr");
     const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", "Nenhuma TSK em backlog com data de criação neste grupo.");
-    cell.colSpan = BACKLOG_AGING_LABELS.length + 2;
+    cell.colSpan = columns.length + 2;
     row.append(cell);
     pivotRows.replaceChildren(row);
     pivotFoot.replaceChildren();
@@ -1803,12 +1811,13 @@ function exportBacklogAging() {
   }
   const stale = (agingStaleOnly ? aging.stale : aging.sorted).filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
   const workbook = XLSX.utils.book_new();
+  const columns = agingColumns();
   const pivotSheet = XLSX.utils.aoa_to_sheet([
-    ["Estado", ...BACKLOG_AGING_LABELS, "Total"],
-    ...aging.rows.map(([location, counts]) => [location, ...BACKLOG_AGING_LABELS.map((label) => counts[label]), counts.total]),
-    ["Total", ...BACKLOG_AGING_LABELS.map((label) => aging.total[label]), aging.total.total]
+    ["Estado", ...columns, "Total"],
+    ...aging.rows.map(([location, counts]) => [location, ...columns.map((label) => counts[label]), counts.total]),
+    ["Total", ...columns.map((label) => aging.total[label]), aging.total.total]
   ]);
-  pivotSheet["!cols"] = [22, ...BACKLOG_AGING_LABELS.map(() => 14), 10].map((wch) => ({ wch }));
+  pivotSheet["!cols"] = [22, ...columns.map(() => 14), 10].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
   const staleSheet = XLSX.utils.aoa_to_sheet([
     ["TSK", "Estado", "Planilha", "Grupo", "Bucket", "CM", "Status", "Prioridade", "Criação do NTT", "Parada há", "Dias", "Aging"],
