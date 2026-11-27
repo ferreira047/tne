@@ -1720,10 +1720,16 @@ function formatStaleTime(days) {
   return hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h`;
 }
 
+// Visão do aging: Todas, TNE 1 (AL, BA, PI, SE) ou TNE 2 (CE, PB, PE, RN), pelo estado do CM.
+const AGING_GROUP_LOCATIONS = { tneOne: TNE_ONE_TECHNICIAN_LOCATIONS, tneTwo: TNE_TWO_TECHNICIAN_LOCATIONS };
+function matchesAgingGroup(ticket) {
+  return currentAgingGroup === "all" || AGING_GROUP_LOCATIONS[currentAgingGroup].has(ticket.location);
+}
+
 // Estado × aging do grupo escolhido, mais a lista das TSKs (todas e só as paradas há mais de 1 dia).
 function buildBacklogAging(analysis, now = new Date()) {
   const tickets = analysis.backlogTickets
-    .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
+    .filter((ticket) => matchesAgingGroup(ticket))
     .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
     .filter((ticket) => !agingHide2G || !isGenesis2G(ticket))
     .map((ticket) => {
@@ -1823,7 +1829,7 @@ function renderBacklogAging(analysis) {
   const info2G = document.getElementById("aging-2g-info");
   if (agingHide2G) {
     const removed = analysis.backlogTickets
-      .filter((ticket) => currentAgingGroup === "all" || ticket.group === currentAgingGroup)
+      .filter((ticket) => matchesAgingGroup(ticket))
       .filter((ticket) => !currentAgingPriorities.size || currentAgingPriorities.has(agingPriorityOf(ticket)))
       .filter(isGenesis2G).length;
     const genesisText = genesisBase ? `; sem tipo, base Genesis ${genesisBase.fileName}` : "";
@@ -1947,7 +1953,7 @@ function exportBacklogAging() {
   ]);
   staleSheet["!cols"] = [16, 18, 22, 14, 14, 40, 24, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, staleSheet, agingStaleOnly ? "Mais de 1 dia" : "Backlog");
-  const groupSuffix = { all: "todas", technician: "fila-tecnica", commandCenter: "centralizado" }[currentAgingGroup];
+  const groupSuffix = { all: "todas", tneOne: "tne-1", tneTwo: "tne-2" }[currentAgingGroup];
   const stateSuffix = currentAgingStates.size === 1 ? `-${normalizeText([...currentAgingStates][0]).replace(/\s+/g, "-")}`
     : currentAgingStates.size > 1 ? `-${currentAgingStates.size}-estados` : "";
   const listSuffix = `${agingStaleOnly ? "-mais-de-1-dia" : ""}${currentAgingPriorities.size ? `-${BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).map((priority) => normalizeText(priority).replace(/\s+/g, "-")).join("-")}` : ""}`;
@@ -2203,6 +2209,9 @@ for (const button of document.querySelectorAll("[data-backlog-group]")) {
 for (const button of document.querySelectorAll("[data-aging-group]")) {
   button.addEventListener("click", () => {
     currentAgingGroup = button.dataset.agingGroup;
+    if (currentAgingGroup !== "all") {
+      for (const state of [...currentAgingStates]) if (!AGING_GROUP_LOCATIONS[currentAgingGroup].has(state)) currentAgingStates.delete(state);
+    }
     if (currentAnalysis) renderBacklogAging(currentAnalysis);
   });
 }
