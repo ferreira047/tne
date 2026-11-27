@@ -658,11 +658,15 @@ function causeCell(record) {
   return td;
 }
 
-function renderDetails(view) {
-  const records = (filters.onlyUnassigned ? view.unassigned : view.scoped)
+// Linhas da tabela "Detalhes e responsável" (tela e planilha): sem responsável primeiro; depois os mais antigos.
+function detailRecords(view) {
+  return (filters.onlyUnassigned ? view.unassigned : view.scoped)
     .slice()
-    // Sem responsável primeiro; depois os mais antigos.
     .sort((a, b) => Number(Boolean(a.responsible)) - Number(Boolean(b.responsible)) || b.days - a.days || compareAnf(a, b));
+}
+
+function renderDetails(view) {
+  const records = detailRecords(view);
   document.getElementById("details-total").textContent = `${formatCount(records.length)} linha(s)`;
   const body = document.getElementById("detail-rows");
   if (!records.length) {
@@ -1076,6 +1080,35 @@ function exportGenesisExcel() {
   });
   providerSheet["!cols"] = [{ wch: 6 }, { wch: 18 }, { wch: 16 }, { wch: 15 }, { wch: 60 }];
   XLSX.utils.book_append_sheet(book, providerSheet, "Pendências provedor");
+
+  // Mesma visão da tabela "Detalhes e responsável": filtros, ordem e responsável escolhido na tela.
+  const details = detailRecords(view);
+  const detailSheet = XLSX.utils.aoa_to_sheet([
+    ["Horário", "Aging", "Site", "Tec.", "UF", "Região", "ANF", "Causa", "Detalhe", "EVE/CRQ", "Responsável", "Origem do responsável"],
+    ...details.map((record) => [
+      record.horario,
+      record.aging,
+      record.site,
+      record.technologyFilter,
+      record.uf,
+      record.region,
+      record.anf,
+      record.cause,
+      record.detail === "#" ? "" : record.detail,
+      record.eveCrq,
+      record.responsible || "",
+      Object.hasOwn(responsibleEdits, record.key) ? "editado nesta sessão"
+        : record.responsibleSource === "arquivo" ? "do arquivo" : SOURCE_NOTES[record.responsibleSource] || ""
+    ])
+  ], { cellDates: true, dateNF: "dd/mm/yyyy hh:mm" });
+  details.forEach((record, index) => {
+    const href = safeLink(record.eveCrqLink);
+    const cellRef = XLSX.utils.encode_cell({ r: index + 1, c: 9 });
+    if (href && detailSheet[cellRef]) detailSheet[cellRef].l = { Target: href };
+  });
+  detailSheet["!cols"] = [18, 15, 16, 6, 6, 8, 6, 44, 60, 18, 16, 24].map((wch) => ({ wch }));
+  detailSheet["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: details.length, c: 11 } }) };
+  XLSX.utils.book_append_sheet(book, detailSheet, "Detalhes e responsável");
 
   const horarioColumn = dataset.header.findIndex((name) => normalizeText(name) === normalizeText(COLUMNS.horario));
   const skipped = [COLUMN_RESPONSIBLE, ...LEGACY_CALCULATED_COLUMNS].map(normalizeText);
