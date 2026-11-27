@@ -1388,11 +1388,17 @@ function copyTextFallback(text) {
   return copied;
 }
 
-// Cores do tema ativo na tela (claro ou escuro, pelo data-theme do <html>): a imagem do
-// gráfico sai no mesmo tema em que a página está.
+// As imagens copiadas saem sempre no tema claro: lê as cores de um elemento com
+// data-theme="light", que redefine a paleta mesmo com a página no escuro.
 function readThemeColors(names) {
-  const style = getComputedStyle(document.documentElement);
-  return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
+  const probe = document.createElement("div");
+  probe.dataset.theme = "light";
+  probe.hidden = true;
+  document.body.append(probe);
+  const style = getComputedStyle(probe);
+  const colors = Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
+  probe.remove();
+  return colors;
 }
 
 // Desenha o gráfico "Encerradas por grupo" num canvas (o html2canvas não renderiza conic-gradient).
@@ -1718,6 +1724,114 @@ function parseNttCreated(value) {
 function formatStaleTime(days) {
   const hours = Math.floor(days * 24);
   return hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h`;
+}
+
+// Desenha o quadro de aging (visão, filtros e estados da tela) num canvas, para colar no report.
+function renderBacklogAgingImage(analysis) {
+  const colors = readThemeColors(["surface", "sunken", "line", "line-soft", "ink", "ink-3", "ink-4", "muted", "faint", "amber", "orange", "red"]);
+  const toneColors = { "<1d": colors["ink-3"], "Entre 1d e 3d": colors["ink-3"], "Entre 3d e 5d": colors.amber, "Entre 5d e 10d": colors.orange, ">10d": colors.red };
+  const font = getComputedStyle(document.body).fontFamily;
+  const aging = buildBacklogAging(analysis);
+  const columns = agingColumns();
+  const rows = [...aging.rows.map(([location, counts]) => ({ location, counts })), { location: "Total", counts: aging.total, isTotal: true }];
+  const fmt = (value) => value.toLocaleString("pt-BR");
+  const view = { all: "Todas", tneOne: "TNE 1", tneTwo: "TNE 2" }[currentAgingGroup];
+  const filters = [view];
+  if (agingStaleOnly) filters.push("Acima de 1 dia");
+  if (agingHide2G) filters.push("Sem 2G");
+  if (currentAgingPriorities.size) filters.push(BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).join(", "));
+  const percent = aging.tickets.length ? Math.round((aging.stale.length / aging.tickets.length) * 100) : 0;
+
+  const stateWidth = 190;
+  const valueWidth = 104;
+  const width = stateWidth + (columns.length + 1) * valueWidth + 22;
+  const headerHeight = 124;
+  const columnHeaderHeight = 34;
+  const rowHeight = 34;
+  const height = headerHeight + columnHeaderHeight + rows.length * rowHeight + 1;
+  const scale = Math.max(2, window.devicePixelRatio || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const context = canvas.getContext("2d");
+  context.scale(scale, scale);
+  context.fillStyle = colors.surface;
+  context.fillRect(0, 0, width, height);
+
+  const now = new Date();
+  context.textBaseline = "alphabetic";
+  context.textAlign = "left";
+  context.fillStyle = colors.ink;
+  context.font = `600 17px ${font}`;
+  context.fillText(`Aging das TSKs em backlog · ${view}`, 22, 36);
+  context.fillStyle = colors.muted;
+  context.font = `12px ${font}`;
+  context.fillText(`${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} · ${filters.join(" · ")}`, 22, 58);
+  context.fillStyle = colors.red;
+  context.font = `600 24px ${font}`;
+  const staleText = fmt(aging.stale.length);
+  context.fillText(staleText, 22, 96);
+  const staleWidth = context.measureText(staleText).width;
+  context.fillStyle = colors["ink-3"];
+  context.font = `13px ${font}`;
+  context.fillText(`TSKs paradas há mais de 1 dia, de ${fmt(aging.tickets.length)} em backlog (${percent}%).`, 22 + staleWidth + 8, 96);
+
+  let y = headerHeight;
+  context.fillStyle = colors.sunken;
+  context.fillRect(0, y, width, columnHeaderHeight);
+  context.fillStyle = colors.muted;
+  context.font = `600 11px ${font}`;
+  context.fillText("ESTADO", 22, y + 22);
+  context.textAlign = "right";
+  [...columns, "Total"].forEach((label, index) => context.fillText(label.toUpperCase(), stateWidth + (index + 1) * valueWidth, y + 22));
+  y += columnHeaderHeight;
+
+  for (const row of rows) {
+    if (row.isTotal) {
+      context.fillStyle = colors.sunken;
+      context.fillRect(0, y, width, rowHeight);
+      context.fillStyle = colors.line;
+    } else {
+      context.fillStyle = colors["line-soft"];
+    }
+    context.fillRect(0, y, width, 1);
+    const baseline = y + 22;
+    context.textAlign = "left";
+    context.fillStyle = row.isTotal ? colors.ink : colors["ink-4"];
+    context.font = `${row.isTotal ? "600 " : ""}13px ${font}`;
+    context.fillText(row.location, 22, baseline);
+    context.textAlign = "right";
+    columns.forEach((column, index) => {
+      const count = row.counts[column];
+      context.fillStyle = count ? toneColors[column] : colors.faint;
+      context.font = `${count ? "600 " : ""}13px ${font}`;
+      context.fillText(count ? fmt(count) : "–", stateWidth + (index + 1) * valueWidth, baseline);
+    });
+    context.fillStyle = colors.ink;
+    context.font = `600 13px ${font}`;
+    context.fillText(fmt(row.counts.total), stateWidth + (columns.length + 1) * valueWidth, baseline);
+    y += rowHeight;
+  }
+  context.strokeStyle = colors.line;
+  context.strokeRect(0.5, 0.5, width - 1, height - 1);
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Falha ao gerar imagem"))), "image/png"));
+}
+
+async function copyBacklogAgingImage() {
+  if (!currentAnalysis) return;
+  const imagePromise = renderBacklogAgingImage(currentAnalysis);
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("Clipboard indisponível");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": imagePromise })]);
+    showFeedback("Report do aging copiado como imagem.", "success");
+  } catch {
+    try {
+      downloadBlob(await imagePromise, "aging-backlog.png");
+      showFeedback("O navegador não permite copiar a imagem; o report do aging foi baixado como PNG.", "success");
+    } catch {
+      showFeedback("Não foi possível gerar a imagem do report do aging.");
+    }
+  }
 }
 
 // Visão do aging: Todas, TNE 1 (AL, BA, PI, SE) ou TNE 2 (CE, PB, PE, RN), pelo estado do CM.
@@ -2327,6 +2441,7 @@ document.getElementById("export-technicians-button").addEventListener("click", e
 document.getElementById("copy-backlog-state-image-button").addEventListener("click", copyBacklogByStateImage);
 document.getElementById("export-backlog-state-button").addEventListener("click", exportBacklogTsksByState);
 document.getElementById("export-aging-button").addEventListener("click", exportBacklogAging);
+document.getElementById("copy-aging-report-button").addEventListener("click", copyBacklogAgingImage);
 clearButton.addEventListener("click", () => clearAnalysis());
 // Planilhas guardadas na sessão: a ONLINE pode vir da Análise de técnicos ou dos Chamados repetidos;
 // a NÃO AGENDADAS, dos Chamados repetidos.
