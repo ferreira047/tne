@@ -155,6 +155,15 @@ let currentAgingPriorities = new Set();
 let currentAgingSort = "days";
 const AGING_NO_FAILURE = "Sem tipo";
 const agingFailureOf = (ticket) => ticket.failureType || AGING_NO_FAILURE;
+// Botão "Falhas" do aging: mostra na tela a contagem por tipo de falha (a aba Falhas do Exportar aging).
+let agingShowFailures = false;
+// Contagem por tipo de falha, da maior para a menor ("Sem tipo" no fim): [[tipo, quantidade], ...].
+function agingFailureRows(tickets) {
+  const counts = new Map();
+  for (const ticket of tickets) counts.set(agingFailureOf(ticket), (counts.get(agingFailureOf(ticket)) || 0) + 1);
+  return [...counts].sort(([leftName, left], [rightName, right]) =>
+    (leftName === AGING_NO_FAILURE) - (rightName === AGING_NO_FAILURE) || right - left || leftName.localeCompare(rightName, "pt-BR"));
+}
 
 // Botão "Sem 2G" do aging: tira as TSKs cujo NE ID é 2G na base do Genesis (extração do Painel
 // Online, a mesma anexada em genesis.html). Tecnologia = 1º caractere da coluna "tecnologia" + "G",
@@ -2000,6 +2009,8 @@ function renderBacklogAging(analysis) {
     ? `${fmt(stale.length)} TSKs ${scope}, ${orderText}.`
     : `${orderText.charAt(0).toUpperCase()}${orderText.slice(1)}. Clique num estado do quadro para filtrar (Ctrl + clique para mais de um).`;
 
+  renderAgingFailures(stale, scope, make, fmt);
+
   const staleRows = document.getElementById("aging-stale-rows");
   if (!stale.length) {
     const row = make("tr");
@@ -2037,6 +2048,45 @@ function renderBacklogAging(analysis) {
   }));
 }
 
+// Quadro "Falhas" (botão Falhas): as TSKs da lista, com os mesmos filtros, por tipo de falha.
+function renderAgingFailures(tickets, scope, make, fmt) {
+  document.getElementById("aging-failures-button").setAttribute("aria-pressed", String(agingShowFailures));
+  document.getElementById("aging-failures-panel").classList.toggle("hidden", !agingShowFailures);
+  if (!agingShowFailures) return;
+  const rows = agingFailureRows(tickets);
+  const what = agingStaleOnly ? "TSKs paradas há mais de 1 dia" : "TSKs do backlog";
+  document.getElementById("aging-failures-description").textContent =
+    `${fmt(tickets.length)} ${what}${scope ? ` ${scope}` : ""} por tipo de falha (coluna Tipo da Falha), da maior contagem para a menor.`;
+  const body = document.getElementById("aging-failures-rows");
+  const foot = document.getElementById("aging-failures-foot");
+  if (!rows.length) {
+    const row = make("tr");
+    const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", "Nenhuma TSK na lista.");
+    cell.colSpan = 3;
+    row.append(cell);
+    body.replaceChildren(row);
+    foot.replaceChildren();
+    return;
+  }
+  const max = rows[0][1] || 1;
+  body.replaceChildren(...rows.map(([failure, count]) => {
+    const row = make("tr", "hover:bg-[color:var(--hover)]");
+    const name = make("td", `truncate px-3 py-2 sm:pl-5 ${failure === AGING_NO_FAILURE ? "text-[color:var(--muted)]" : "text-[color:var(--ink-2)]"}`, failure);
+    name.title = failure;
+    const barCell = make("td", "px-3 py-2");
+    const bar = make("div", "h-2 rounded-sm bg-[color:var(--green-solid)] opacity-70");
+    bar.style.width = `${Math.max(2, Math.round((count / max) * 100))}%`;
+    barCell.append(bar);
+    row.append(name, barCell, make("td", "tabular px-3 py-2 text-right font-semibold text-[color:var(--ink)] sm:pr-5", fmt(count)));
+    return row;
+  }));
+  const total = make("tr");
+  const label = make("th", "px-3 py-2.5 text-[color:var(--ink)] sm:pl-5", "Total Geral");
+  label.scope = "row";
+  total.append(label, make("td", ""), make("td", "tabular px-3 py-2.5 text-right text-[color:var(--ink)] sm:pr-5", fmt(tickets.length)));
+  foot.replaceChildren(total);
+}
+
 // Planilha do aging (grupo selecionado): aba "Aging por estado" e aba com a lista exibida
 // (todo o backlog ou só as paradas há mais de 1 dia, conforme o botão).
 function exportBacklogAging() {
@@ -2063,10 +2113,7 @@ function exportBacklogAging() {
   XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
   // Aba "Falhas": contagem das TSKs exportadas por tipo de falha (coluna "Tipo da Falha"),
   // no formato da dinâmica usada no report: maior contagem primeiro e "Total Geral" no fim.
-  const failureCounts = new Map();
-  for (const ticket of stale) failureCounts.set(agingFailureOf(ticket), (failureCounts.get(agingFailureOf(ticket)) || 0) + 1);
-  const failureRows = [...failureCounts].sort(([leftName, left], [rightName, right]) =>
-    (leftName === AGING_NO_FAILURE) - (rightName === AGING_NO_FAILURE) || right - left || leftName.localeCompare(rightName, "pt-BR"));
+  const failureRows = agingFailureRows(stale);
   const failureSheet = XLSX.utils.aoa_to_sheet([
     ["Falhas", "Contagem de Número"],
     ...failureRows,
@@ -2413,6 +2460,10 @@ for (const button of document.querySelectorAll("[data-aging-priority]")) {
     if (currentAnalysis) renderBacklogAging(currentAnalysis);
   });
 }
+document.getElementById("aging-failures-button").addEventListener("click", () => {
+  agingShowFailures = !agingShowFailures;
+  if (currentAnalysis) renderBacklogAging(currentAnalysis);
+});
 document.getElementById("aging-sort").addEventListener("change", (event) => {
   currentAgingSort = ["cm", "failure"].includes(event.target.value) ? event.target.value : "days";
   if (currentAnalysis) renderBacklogAging(currentAnalysis);
