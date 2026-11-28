@@ -2054,6 +2054,112 @@ function renderBacklogAging(analysis) {
   }));
 }
 
+// Último quadro Falhas desenhado na tela (linhas, total e descrição), para o "Copiar parcial".
+let lastAgingFailures = null;
+
+// Desenha o quadro "Falhas" (todas as linhas, sem a rolagem da tela) num canvas, para colar no report.
+function renderAgingFailuresImage({ rows, total, description }) {
+  const colors = readThemeColors(["surface", "sunken", "line", "line-soft", "ink", "ink-2", "muted", "green-solid"]);
+  const font = getComputedStyle(document.body).fontFamily;
+  const fmt = (value) => value.toLocaleString("pt-BR");
+  const width = 640;
+  const nameWidth = 230;
+  const countX = width - 22;
+  const barX = 22 + nameWidth;
+  const barMax = countX - 70 - barX;
+  const headerHeight = 84;
+  const columnHeaderHeight = 34;
+  const rowHeight = 32;
+  const allRows = [...rows.map(([failure, count]) => ({ failure, count })), { failure: "Total Geral", count: total, isTotal: true }];
+  const height = headerHeight + columnHeaderHeight + allRows.length * rowHeight + 1;
+  const scale = Math.max(2, window.devicePixelRatio || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const context = canvas.getContext("2d");
+  context.scale(scale, scale);
+  context.fillStyle = colors.surface;
+  context.fillRect(0, 0, width, height);
+
+  const now = new Date();
+  context.textBaseline = "alphabetic";
+  context.textAlign = "left";
+  context.fillStyle = colors.ink;
+  context.font = `600 17px ${font}`;
+  context.fillText("Falhas", 22, 36);
+  context.fillStyle = colors.muted;
+  context.font = `12px ${font}`;
+  context.fillText(`${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`, 22, 56);
+  context.fillText(description.replace(/ \(coluna Tipo da Falha\), da maior contagem para a menor\.$/, "."), 22, 72);
+
+  let y = headerHeight;
+  context.fillStyle = colors.sunken;
+  context.fillRect(0, y, width, columnHeaderHeight);
+  context.fillStyle = colors.muted;
+  context.font = `600 11px ${font}`;
+  context.fillText("FALHAS", 22, y + 22);
+  context.textAlign = "right";
+  context.fillText("CONTAGEM DE NÚMERO", countX, y + 22);
+  y += columnHeaderHeight;
+
+  const max = rows[0]?.[1] || 1;
+  const fitText = (text, maxWidth) => {
+    if (context.measureText(text).width <= maxWidth) return text;
+    let cut = text;
+    while (cut.length && context.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1);
+    return `${cut}…`;
+  };
+  for (const row of allRows) {
+    if (row.isTotal) {
+      context.fillStyle = colors.sunken;
+      context.fillRect(0, y, width, rowHeight);
+      context.fillStyle = colors.line;
+    } else {
+      context.fillStyle = colors["line-soft"];
+    }
+    context.fillRect(0, y, width, 1);
+    const baseline = y + 21;
+    context.textAlign = "left";
+    context.fillStyle = row.isTotal ? colors.ink : row.failure === AGING_NO_FAILURE ? colors.muted : colors["ink-2"];
+    context.font = `${row.isTotal ? "600 " : ""}13px ${font}`;
+    context.fillText(fitText(row.failure, nameWidth - 12), 22, baseline);
+    if (!row.isTotal) {
+      context.globalAlpha = 0.7;
+      context.fillStyle = colors["green-solid"];
+      context.fillRect(barX, y + 12, Math.max(barMax * 0.02, Math.round((row.count / max) * barMax)), 8);
+      context.globalAlpha = 1;
+    }
+    context.textAlign = "right";
+    context.fillStyle = colors.ink;
+    context.font = `600 13px ${font}`;
+    context.fillText(fmt(row.count), countX, baseline);
+    y += rowHeight;
+  }
+  context.strokeStyle = colors.line;
+  context.strokeRect(0.5, 0.5, width - 1, height - 1);
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Falha ao gerar imagem"))), "image/png"));
+}
+
+async function copyAgingFailuresImage() {
+  if (!lastAgingFailures?.rows.length) {
+    showFeedback("Não há falhas na lista para copiar.", "warning");
+    return;
+  }
+  const imagePromise = renderAgingFailuresImage(lastAgingFailures);
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("Clipboard indisponível");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": imagePromise })]);
+    showFeedback("Parcial de falhas copiado como imagem.", "success");
+  } catch {
+    try {
+      downloadBlob(await imagePromise, "falhas-backlog.png");
+      showFeedback("O navegador não permite copiar a imagem; o quadro de falhas foi baixado como PNG.", "success");
+    } catch {
+      showFeedback("Não foi possível gerar a imagem do quadro de falhas.");
+    }
+  }
+}
+
 // Quadro "Falhas" (botão Falhas): as TSKs da lista, com os mesmos filtros, por tipo de falha.
 function renderAgingFailures(tickets, scope, make, fmt) {
   document.getElementById("aging-failures-button").setAttribute("aria-pressed", String(agingShowFailures));
@@ -2061,8 +2167,9 @@ function renderAgingFailures(tickets, scope, make, fmt) {
   if (!agingShowFailures) return;
   const rows = agingFailureRows(tickets);
   const what = agingStaleOnly ? "TSKs paradas há mais de 1 dia" : "TSKs do backlog";
-  document.getElementById("aging-failures-description").textContent =
-    `${fmt(tickets.length)} ${what}${scope ? ` ${scope}` : ""} por tipo de falha (coluna Tipo da Falha), da maior contagem para a menor.`;
+  const description = `${fmt(tickets.length)} ${what}${scope ? ` ${scope}` : ""} por tipo de falha (coluna Tipo da Falha), da maior contagem para a menor.`;
+  document.getElementById("aging-failures-description").textContent = description;
+  lastAgingFailures = { rows, total: tickets.length, description };
   const body = document.getElementById("aging-failures-rows");
   const foot = document.getElementById("aging-failures-foot");
   if (!rows.length) {
@@ -2569,6 +2676,7 @@ document.getElementById("copy-backlog-state-image-button").addEventListener("cli
 document.getElementById("export-backlog-state-button").addEventListener("click", exportBacklogTsksByState);
 document.getElementById("export-aging-button").addEventListener("click", exportBacklogAging);
 document.getElementById("export-aging-failures-button").addEventListener("click", exportAgingFailures);
+document.getElementById("copy-aging-failures-button").addEventListener("click", copyAgingFailuresImage);
 document.getElementById("copy-aging-report-button").addEventListener("click", copyBacklogAgingImage);
 clearButton.addEventListener("click", () => clearAnalysis());
 // Planilhas guardadas na sessão: a ONLINE pode vir da Análise de técnicos ou dos Chamados repetidos;
