@@ -155,6 +155,12 @@ let currentAgingPriorities = new Set();
 let currentAgingSort = "days";
 const AGING_NO_FAILURE = "Sem tipo";
 const agingFailureOf = (ticket) => ticket.failureType || AGING_NO_FAILURE;
+// Nomes do report para os tipos da coluna "Tipo da Falha" (chave normalizada → nome exibido).
+const FAILURE_TYPE_RENAMES = { "sistema irradiante": "VSWR" };
+const failureTypeName = (value) => {
+  const text = String(value ?? "").trim();
+  return FAILURE_TYPE_RENAMES[normalizeText(text)] || text;
+};
 // Botão "Falhas" do aging: mostra na tela a contagem por tipo de falha (a aba Falhas do Exportar aging).
 let agingShowFailures = false;
 // Contagem por tipo de falha, da maior para a menor ("Sem tipo" no fim): [[tipo, quantidade], ...].
@@ -221,8 +227,8 @@ function isGenesis2G(ticket) {
 }
 
 // Aplica a ordenação escolhida à lista do aging (a entrada já vem da mais antiga para a mais recente).
-function sortAgingList(tickets) {
-  if (currentAgingSort === "failure") {
+function sortAgingList(tickets, mode = currentAgingSort) {
+  if (mode === "failure") {
     // Por tipo de falha: tipos com mais TSKs primeiro; dentro do tipo, a mais antiga primeiro.
     const counts = new Map();
     for (const ticket of tickets) counts.set(agingFailureOf(ticket), (counts.get(agingFailureOf(ticket)) || 0) + 1);
@@ -231,7 +237,7 @@ function sortAgingList(tickets) {
       || agingFailureOf(left).localeCompare(agingFailureOf(right), "pt-BR", { sensitivity: "base" })
       || (right.days ?? -1) - (left.days ?? -1));
   }
-  if (currentAgingSort !== "cm") return tickets;
+  if (mode !== "cm") return tickets;
   return [...tickets].sort((left, right) => {
     const leftCm = String(left.cm || "").trim();
     const rightCm = String(right.cm || "").trim();
@@ -669,7 +675,7 @@ function analyzeSelectedSheet() {
         createdAt: String(row[nttCreatedIndex] ?? "").trim(),
         site: String(row[neIdIndex] ?? "").trim() || String(row[endIdIndex] ?? "").trim(),
         neType: neTypeIndex >= 0 ? String(row[neTypeIndex] ?? "").trim() : "",
-        failureType: failureTypeIndex >= 0 ? String(row[failureTypeIndex] ?? "").trim() : ""
+        failureType: failureTypeIndex >= 0 ? failureTypeName(row[failureTypeIndex]) : ""
       });
     }
     entrantsBySource[slot.key] = countTickets(sourceRows.filter((row) => isCreatedToday(row[nttCreatedIndex])));
@@ -2089,42 +2095,42 @@ function renderAgingFailures(tickets, scope, make, fmt) {
 
 // Planilha do aging (grupo selecionado): aba "Aging por estado" e aba com a lista exibida
 // (todo o backlog ou só as paradas há mais de 1 dia, conforme o botão).
-function exportBacklogAging() {
-  if (!currentAnalysis) return;
+// TSKs que as exportações do aging levam: as da lista na tela (mesmos filtros e ordem).
+function agingExportData() {
+  if (!currentAnalysis) return null;
   if (!window.XLSX?.utils?.book_new || !window.XLSX?.utils?.aoa_to_sheet || !window.XLSX?.writeFile) {
     showFeedback("Não foi possível criar a planilha Excel. Verifique sua conexão e recarregue a página.");
-    return;
+    return null;
   }
   const aging = buildBacklogAging(currentAnalysis);
   if (!aging.tickets.length) {
     showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
-    return;
+    return null;
   }
-  const stale = sortAgingList((agingStaleOnly ? aging.stale : aging.sorted)
-    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location)));
-  const workbook = XLSX.utils.book_new();
-  const columns = agingColumns();
-  const pivotSheet = XLSX.utils.aoa_to_sheet([
-    ["Estado", ...columns, "Total"],
-    ...aging.rows.map(([location, counts]) => [location, ...columns.map((label) => counts[label]), counts.total]),
-    ["Total", ...columns.map((label) => aging.total[label]), aging.total.total]
-  ]);
-  pivotSheet["!cols"] = [22, ...columns.map(() => 14), 10].map((wch) => ({ wch }));
-  XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
-  // Aba "Falhas": contagem das TSKs exportadas por tipo de falha (coluna "Tipo da Falha"),
-  // no formato da dinâmica usada no report: maior contagem primeiro e "Total Geral" no fim.
-  const failureRows = agingFailureRows(stale);
-  const failureSheet = XLSX.utils.aoa_to_sheet([
+  const listed = (agingStaleOnly ? aging.stale : aging.sorted)
+    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  return { aging, listed };
+}
+
+// Aba "Falhas": contagem das TSKs por tipo de falha (coluna "Tipo da Falha"), no formato da
+// dinâmica usada no report: maior contagem primeiro e "Total Geral" no fim.
+function agingFailureSheet(tickets) {
+  const failureRows = agingFailureRows(tickets);
+  const sheet = XLSX.utils.aoa_to_sheet([
     ["Falhas", "Contagem de Número"],
     ...failureRows,
-    ["Total Geral", stale.length]
+    ["Total Geral", tickets.length]
   ]);
-  failureSheet["!cols"] = [{ wch: 30 }, { wch: 20 }];
-  failureSheet["!autofilter"] = { ref: `A1:B${failureRows.length + 1}` };
-  XLSX.utils.book_append_sheet(workbook, failureSheet, "Falhas");
-  const staleSheet = XLSX.utils.aoa_to_sheet([
+  sheet["!cols"] = [{ wch: 30 }, { wch: 20 }];
+  sheet["!autofilter"] = { ref: `A1:B${failureRows.length + 1}` };
+  return sheet;
+}
+
+// Aba com a lista de TSKs do aging (uma linha por TSK).
+function agingTicketsSheet(tickets) {
+  const sheet = XLSX.utils.aoa_to_sheet([
     ["TSK", "NE ID", "Estado", "Planilha", "Grupo", "Bucket", "CM", "Tipo da falha", "Status", "Prioridade", "Criação do NTT", "Parada há", "Dias", "Aging"],
-    ...stale.map((ticket) => [
+    ...tickets.map((ticket) => [
       ticket.tsk,
       ticket.site,
       ticket.location,
@@ -2141,14 +2147,55 @@ function exportBacklogAging() {
       ticket.aging || "Sem data"
     ])
   ]);
-  staleSheet["!cols"] = [16, 18, 22, 14, 14, 40, 24, 26, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
-  XLSX.utils.book_append_sheet(workbook, staleSheet, agingStaleOnly ? "Mais de 1 dia" : "Backlog");
+  sheet["!cols"] = [16, 18, 22, 14, 14, 40, 24, 26, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
+  sheet["!autofilter"] = { ref: `A1:N${tickets.length + 1}` };
+  return sheet;
+}
+
+// Parte do nome do arquivo com o grupo e os filtros da tela.
+function agingExportSuffix() {
   const groupSuffix = { all: "todas", tneOne: "tne-1", tneTwo: "tne-2" }[currentAgingGroup];
   const stateSuffix = currentAgingStates.size === 1 ? `-${normalizeText([...currentAgingStates][0]).replace(/\s+/g, "-")}`
     : currentAgingStates.size > 1 ? `-${currentAgingStates.size}-estados` : "";
-  const listSuffix = `${agingStaleOnly ? "-mais-de-1-dia" : ""}${currentAgingPriorities.size ? `-${BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).map((priority) => normalizeText(priority).replace(/\s+/g, "-")).join("-")}` : ""}`;
-  XLSX.writeFile(workbook, `aging-backlog-${groupSuffix}${stateSuffix}${listSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const listSuffix = `${agingStaleOnly ? "-mais-de-1-dia" : ""}${currentAgingPriorities.size ? `-${BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).map((priority) => normalizeText(priority).replace(/\s+/g, "-")).join("-")}` : ""}${agingHide2G ? "-sem-2g" : ""}`;
+  return `${groupSuffix}${stateSuffix}${listSuffix}-${new Date().toISOString().slice(0, 10)}`;
+}
+
+function exportBacklogAging() {
+  const data = agingExportData();
+  if (!data) return;
+  const { aging } = data;
+  const stale = sortAgingList(data.listed);
+  const workbook = XLSX.utils.book_new();
+  const columns = agingColumns();
+  const pivotSheet = XLSX.utils.aoa_to_sheet([
+    ["Estado", ...columns, "Total"],
+    ...aging.rows.map(([location, counts]) => [location, ...columns.map((label) => counts[label]), counts.total]),
+    ["Total", ...columns.map((label) => aging.total[label]), aging.total.total]
+  ]);
+  pivotSheet["!cols"] = [22, ...columns.map(() => 14), 10].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
+  XLSX.utils.book_append_sheet(workbook, agingFailureSheet(stale), "Falhas");
+  XLSX.utils.book_append_sheet(workbook, agingTicketsSheet(stale), agingStaleOnly ? "Mais de 1 dia" : "Backlog");
+  XLSX.writeFile(workbook, `aging-backlog-${agingExportSuffix()}.xlsx`);
   showFeedback(`Aging exportado: ${stale.length.toLocaleString("pt-BR")} TSKs ${agingStaleOnly ? "paradas há mais de 1 dia" : "em backlog"}.`, "success");
+}
+
+// Botão "Exportar falhas" (quadro Falhas): a dinâmica por tipo de falha e as TSKs da lista,
+// agrupadas pelo tipo na mesma ordem da dinâmica (dentro do tipo, a mais antiga primeiro).
+function exportAgingFailures() {
+  const data = agingExportData();
+  if (!data) return;
+  const tickets = sortAgingList(data.listed, "failure");
+  if (!tickets.length) {
+    showFeedback("Não há TSKs na lista para exportar.", "warning");
+    return;
+  }
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, agingFailureSheet(tickets), "Falhas");
+  XLSX.utils.book_append_sheet(workbook, agingTicketsSheet(tickets), "TSKs");
+  XLSX.writeFile(workbook, `falhas-backlog-${agingExportSuffix()}.xlsx`);
+  showFeedback(`Falhas exportadas: ${tickets.length.toLocaleString("pt-BR")} TSKs ${agingStaleOnly ? "paradas há mais de 1 dia" : "em backlog"}.`, "success");
 }
 
 // Planilha com as TSKs do backlog (grupo selecionado): aba "Todas" e uma aba por estado.
@@ -2521,6 +2568,7 @@ document.getElementById("export-technicians-button").addEventListener("click", e
 document.getElementById("copy-backlog-state-image-button").addEventListener("click", copyBacklogByStateImage);
 document.getElementById("export-backlog-state-button").addEventListener("click", exportBacklogTsksByState);
 document.getElementById("export-aging-button").addEventListener("click", exportBacklogAging);
+document.getElementById("export-aging-failures-button").addEventListener("click", exportAgingFailures);
 document.getElementById("copy-aging-report-button").addEventListener("click", copyBacklogAgingImage);
 clearButton.addEventListener("click", () => clearAnalysis());
 // Planilhas guardadas na sessão: a ONLINE pode vir da Análise de técnicos ou dos Chamados repetidos;
