@@ -2061,24 +2061,20 @@ function exportBacklogAging() {
   ]);
   pivotSheet["!cols"] = [22, ...columns.map(() => 14), 10].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
-  // Aba "Por tipo de falha": tipo × faixa de aging das TSKs exportadas.
+  // Aba "Falhas": contagem das TSKs exportadas por tipo de falha (coluna "Tipo da Falha"),
+  // no formato da dinâmica usada no report: maior contagem primeiro e "Total Geral" no fim.
   const failureCounts = new Map();
-  for (const ticket of stale) {
-    if (!failureCounts.has(agingFailureOf(ticket))) failureCounts.set(agingFailureOf(ticket), { ...Object.fromEntries(columns.map((label) => [label, 0])), semData: 0, total: 0 });
-    const counts = failureCounts.get(agingFailureOf(ticket));
-    if (columns.includes(ticket.aging)) counts[ticket.aging] += 1;
-    else counts.semData += 1;
-    counts.total += 1;
-  }
-  const failureRows = [...failureCounts].sort(([, left], [, right]) => right.total - left.total);
+  for (const ticket of stale) failureCounts.set(agingFailureOf(ticket), (failureCounts.get(agingFailureOf(ticket)) || 0) + 1);
+  const failureRows = [...failureCounts].sort(([leftName, left], [rightName, right]) =>
+    (leftName === AGING_NO_FAILURE) - (rightName === AGING_NO_FAILURE) || right - left || leftName.localeCompare(rightName, "pt-BR"));
   const failureSheet = XLSX.utils.aoa_to_sheet([
-    ["Tipo da falha", ...columns, "Sem data", "Total"],
-    ...failureRows.map(([failure, counts]) => [failure, ...columns.map((label) => counts[label]), counts.semData, counts.total]),
-    ["Total", ...columns.map((label) => failureRows.reduce((sum, [, counts]) => sum + counts[label], 0)),
-      failureRows.reduce((sum, [, counts]) => sum + counts.semData, 0), stale.length]
+    ["Falhas", "Contagem de Número"],
+    ...failureRows,
+    ["Total Geral", stale.length]
   ]);
-  failureSheet["!cols"] = [30, ...columns.map(() => 14), 10, 10].map((wch) => ({ wch }));
-  XLSX.utils.book_append_sheet(workbook, failureSheet, "Por tipo de falha");
+  failureSheet["!cols"] = [{ wch: 30 }, { wch: 20 }];
+  failureSheet["!autofilter"] = { ref: `A1:B${failureRows.length + 1}` };
+  XLSX.utils.book_append_sheet(workbook, failureSheet, "Falhas");
   const staleSheet = XLSX.utils.aoa_to_sheet([
     ["TSK", "NE ID", "Estado", "Planilha", "Grupo", "Bucket", "CM", "Tipo da falha", "Status", "Prioridade", "Criação do NTT", "Parada há", "Dias", "Aging"],
     ...stale.map((ticket) => [
