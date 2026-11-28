@@ -467,24 +467,30 @@
                 <select id="aging-sort" class="rounded-sm border border-[color:var(--line-strong)] bg-[color:var(--surface)] px-3 py-2 text-sm font-normal text-[color:var(--ink)] focus:border-[color:var(--green)] focus:outline-none focus:ring-2 focus:ring-[color:var(--ring)]">
                   <option value="days">Mais antiga primeiro</option>
                   <option value="cm">Por CM (A–Z)</option>
+                  <option value="failure">Por tipo de falha</option>
                 </select>
               </label>
             </div>
+          </div>
+          <div class="border-t border-[color:var(--line-soft)] px-5 py-3 sm:px-6">
+            <p class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--muted)]">Tipo de falha <span class="font-normal normal-case tracking-normal">· clique para filtrar, Ctrl + clique para mais de um</span></p>
+            <div id="aging-failure-chips" class="flex flex-wrap gap-1.5"></div>
           </div>
           <div class="max-h-[480px] overflow-y-auto overflow-x-hidden">
             <table class="w-full table-fixed text-left text-sm">
               <thead class="sticky top-0 bg-[color:var(--sunken)] text-[11px] uppercase tracking-wide text-[color:var(--muted)]">
                 <tr>
-                  <th scope="col" class="w-[14%] px-3 py-2.5 font-semibold sm:pl-5">TSK</th>
-                  <th scope="col" class="w-[12%] px-3 py-2.5 font-semibold">NE ID</th>
-                  <th scope="col" class="w-[11%] px-3 py-2.5 font-semibold">Estado</th>
+                  <th scope="col" class="w-[13%] px-3 py-2.5 font-semibold sm:pl-5">TSK</th>
+                  <th scope="col" class="w-[11%] px-3 py-2.5 font-semibold">NE ID</th>
+                  <th scope="col" class="w-[9%] px-3 py-2.5 font-semibold">Estado</th>
                   <th scope="col" class="w-[12%] px-3 py-2.5 font-semibold" title="CM do chamado (passe o mouse na célula para ver o bucket)">CM</th>
-                  <th scope="col" class="hidden w-[9%] px-3 py-2.5 font-semibold lg:table-cell">Status</th>
+                  <th scope="col" class="w-[12%] px-3 py-2.5 font-semibold" title="Coluna Tipo da Falha">Tipo de falha</th>
+                  <th scope="col" class="hidden w-[8%] px-3 py-2.5 font-semibold lg:table-cell">Status</th>
                   <th scope="col" class="w-[6%] px-3 py-2.5 font-semibold">Prior.</th>
-                  <th scope="col" class="hidden w-[8%] px-3 py-2.5 font-semibold lg:table-cell">Planilha</th>
+                  <th scope="col" class="hidden w-[6%] px-3 py-2.5 font-semibold lg:table-cell">Planilha</th>
                   <th scope="col" class="hidden w-[9%] px-3 py-2.5 font-semibold md:table-cell" title="Criação do NTT (coluna AS)">Criação NTT</th>
                   <th scope="col" class="w-[7%] px-3 py-2.5 text-right font-semibold" title="Tempo parada desde a Criação do NTT">Parada</th>
-                  <th scope="col" class="w-[12%] px-3 py-2.5 font-semibold sm:pr-5">Aging</th>
+                  <th scope="col" class="w-[7%] px-3 py-2.5 font-semibold sm:pr-5">Aging</th>
                 </tr>
               </thead>
               <tbody id="aging-stale-rows" class="divide-y divide-[color:var(--line-soft)]"></tbody>
@@ -500,6 +506,6 @@
     <footer class="pt-8 text-center text-[11px] text-[color:var(--faint)]">Report Backlog <span aria-hidden="true">·</span> leitura e processamento locais</footer>
   </div>
 
-  <script src="app/main.js?v=20261126e"></script>
+  <script src="app/main.js?v=20261127a"></script>
 </body>
 </html>

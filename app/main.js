@@ -153,6 +153,11 @@ let agingStaleOnly = false;
 let currentAgingPriorities = new Set();
 // Ordenação da lista do aging: "days" (mais antiga primeiro) ou "cm" (CM A–Z, depois mais antiga).
 let currentAgingSort = "days";
+// Tipos de falha (coluna "Tipo da Falha") escolhidos na faixa acima da lista do aging
+// (vazio = todos; Ctrl/Cmd + clique junta mais de um).
+let currentAgingFailures = new Set();
+const AGING_NO_FAILURE = "Sem tipo";
+const agingFailureOf = (ticket) => ticket.failureType || AGING_NO_FAILURE;
 
 // Botão "Sem 2G" do aging: tira as TSKs cujo NE ID é 2G na base do Genesis (extração do Painel
 // Online, a mesma anexada em genesis.html). Tecnologia = 1º caractere da coluna "tecnologia" + "G",
@@ -211,6 +216,15 @@ function isGenesis2G(ticket) {
 
 // Aplica a ordenação escolhida à lista do aging (a entrada já vem da mais antiga para a mais recente).
 function sortAgingList(tickets) {
+  if (currentAgingSort === "failure") {
+    // Por tipo de falha: tipos com mais TSKs primeiro; dentro do tipo, a mais antiga primeiro.
+    const counts = new Map();
+    for (const ticket of tickets) counts.set(agingFailureOf(ticket), (counts.get(agingFailureOf(ticket)) || 0) + 1);
+    const rank = (ticket) => (ticket.failureType ? counts.get(ticket.failureType) : -1);
+    return [...tickets].sort((left, right) => rank(right) - rank(left)
+      || agingFailureOf(left).localeCompare(agingFailureOf(right), "pt-BR", { sensitivity: "base" })
+      || (right.days ?? -1) - (left.days ?? -1));
+  }
   if (currentAgingSort !== "cm") return tickets;
   return [...tickets].sort((left, right) => {
     const leftCm = String(left.cm || "").trim();
@@ -589,6 +603,7 @@ function analyzeSelectedSheet() {
     const neIdIndex = headerIndex("NE ID");
     const endIdIndex = headerIndex("END_ID");
     const neTypeIndex = headerIndex("Tipo de NE");
+    const failureTypeIndex = headerIndex("Tipo da Falha");
     if (isScheduledSheet(rows) === !scheduled) {
       const other = Object.values(SOURCES).find((source) => source.scheduled !== scheduled);
       const fileName = slot.fileName;
@@ -647,7 +662,8 @@ function analyzeSelectedSheet() {
         priority: String(row[priorityIndex] ?? "").trim(),
         createdAt: String(row[nttCreatedIndex] ?? "").trim(),
         site: String(row[neIdIndex] ?? "").trim() || String(row[endIdIndex] ?? "").trim(),
-        neType: neTypeIndex >= 0 ? String(row[neTypeIndex] ?? "").trim() : ""
+        neType: neTypeIndex >= 0 ? String(row[neTypeIndex] ?? "").trim() : "",
+        failureType: failureTypeIndex >= 0 ? String(row[failureTypeIndex] ?? "").trim() : ""
       });
     }
     entrantsBySource[slot.key] = countTickets(sourceRows.filter((row) => isCreatedToday(row[nttCreatedIndex])));
@@ -1975,13 +1991,16 @@ function renderBacklogAging(analysis) {
     ...optionLocations.map((location) => option(location, `${location} (${fmt(staleByLocation.get(location) || 0)})`))
   );
   stateFilter.value = selectedStates.length > 1 ? "__multi__" : (selectedStates[0] || "");
-  const stale = sortAgingList(listTickets.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location)));
+  const stateTickets = listTickets.filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  renderAgingFailures(stateTickets, make, fmt);
+  const stale = sortAgingList(stateTickets.filter((ticket) => !currentAgingFailures.size || currentAgingFailures.has(agingFailureOf(ticket))));
   document.getElementById("aging-sort").value = currentAgingSort;
-  const orderText = currentAgingSort === "cm" ? "ordenadas por CM" : "da mais antiga para a mais recente";
+  const orderText = { cm: "ordenadas por CM", failure: "agrupadas por tipo de falha" }[currentAgingSort] || "da mais antiga para a mais recente";
   const selectedPriorities = BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority));
   const scope = [
     selectedStates.length ? `em ${selectedStates.join(", ")}` : "",
-    selectedPriorities.length ? `com ${selectedPriorities.join(", ")}` : ""
+    selectedPriorities.length ? `com ${selectedPriorities.join(", ")}` : "",
+    currentAgingFailures.size ? `de ${[...currentAgingFailures].join(", ")}` : ""
   ].filter(Boolean).join(" ");
   document.getElementById("aging-stale-description").textContent = scope
     ? `${fmt(stale.length)} TSKs ${scope}, ${orderText}.`
@@ -1992,7 +2011,7 @@ function renderBacklogAging(analysis) {
     const row = make("tr");
     const what = agingStaleOnly ? "Nenhuma TSK parada há mais de 1 dia" : "Nenhuma TSK em backlog";
     const cell = make("td", "px-5 py-6 text-center text-sm text-[color:var(--muted)]", scope ? `${what} ${scope}.` : `${what} neste grupo.`);
-    cell.colSpan = 10;
+    cell.colSpan = 11;
     row.append(cell);
     staleRows.replaceChildren(row);
     return;
@@ -2012,6 +2031,7 @@ function renderBacklogAging(analysis) {
       textCell(ticket.site, "text-[color:var(--ink-2)]"),
       textCell(ticket.location, "text-[color:var(--ink-4)]"),
       textCell(ticket.cm, "text-[color:var(--ink-4)]", [ticket.cm, ticket.bucket].filter(Boolean).join(" · ")),
+      textCell(ticket.failureType, "text-[color:var(--ink-2)]"),
       textCell(ticket.status, "hidden text-[color:var(--ink-4)] lg:table-cell"),
       textCell(priority, `font-semibold ${BACKLOG_PRIORITY_TONES[priority] || "text-[color:var(--ink-3)]"}`),
       textCell(ticket.source === "Não agendadas" ? "Não agend." : ticket.source, "hidden text-[color:var(--ink-4)] lg:table-cell", ticket.source),
@@ -2021,6 +2041,49 @@ function renderBacklogAging(analysis) {
     );
     return row;
   }));
+}
+
+// Faixa "Tipo de falha" acima da lista: um botão por tipo (com a quantidade nos estados escolhidos),
+// do mais frequente ao menos. Clique filtra a lista; Ctrl/Cmd + clique junta mais de um tipo.
+function renderAgingFailures(tickets, make, fmt) {
+  const counts = new Map();
+  for (const ticket of tickets) counts.set(agingFailureOf(ticket), (counts.get(agingFailureOf(ticket)) || 0) + 1);
+  for (const failure of currentAgingFailures) if (!counts.has(failure)) counts.set(failure, 0);
+  const entries = [...counts].sort(([leftName, left], [rightName, right]) =>
+    (leftName === AGING_NO_FAILURE) - (rightName === AGING_NO_FAILURE) || right - left || leftName.localeCompare(rightName, "pt-BR"));
+  const max = Math.max(1, ...entries.map(([, count]) => count));
+  const chip = (value, label, count, pressed) => {
+    const button = make("button", "aging-failure-chip relative inline-flex items-center gap-2 overflow-hidden rounded-sm border px-2.5 py-1.5 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-[color:var(--ring)] "
+      + (pressed ? "border-[color:var(--green)] bg-[color:var(--green-soft)] text-[color:var(--ink)]" : "border-[color:var(--line-strong)] bg-[color:var(--surface)] text-[color:var(--ink-3)] hover:bg-[color:var(--hover)]"));
+    button.type = "button";
+    button.dataset.agingFailure = value;
+    button.setAttribute("aria-pressed", String(pressed));
+    if (value) {
+      button.title = "Clique para ver só este tipo de falha; Ctrl + clique para juntar mais de um tipo";
+      const bar = make("span", "pointer-events-none absolute inset-y-0 left-0 bg-[color:var(--green-soft)] opacity-60");
+      bar.style.width = `${Math.round((count / max) * 100)}%`;
+      if (!pressed) button.append(bar);
+    }
+    button.append(make("span", "relative", label), make("span", "tabular relative text-[color:var(--muted)]", fmt(count)));
+    return button;
+  };
+  document.getElementById("aging-failure-chips").replaceChildren(
+    chip("", "Todos", tickets.length, !currentAgingFailures.size),
+    ...entries.map(([failure, count]) => chip(failure, failure, count, currentAgingFailures.has(failure)))
+  );
+}
+
+function selectAgingFailure(failure, additive) {
+  if (!failure) currentAgingFailures = new Set();
+  else if (additive) {
+    if (currentAgingFailures.has(failure)) currentAgingFailures.delete(failure);
+    else currentAgingFailures.add(failure);
+  } else {
+    currentAgingFailures = currentAgingFailures.size === 1 && currentAgingFailures.has(failure) ? new Set() : new Set([failure]);
+  }
+  if (!currentAnalysis) return;
+  renderBacklogAging(currentAnalysis);
+  document.querySelector(`#aging-failure-chips [data-aging-failure="${CSS.escape(failure)}"]`)?.focus({ preventScroll: true });
 }
 
 // Planilha do aging (grupo selecionado): aba "Aging por estado" e aba com a lista exibida
@@ -2036,8 +2099,9 @@ function exportBacklogAging() {
     showFeedback("Não há chamados em backlog neste grupo para exportar.", "warning");
     return;
   }
-  const stale = sortAgingList((agingStaleOnly ? aging.stale : aging.sorted)
-    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location)));
+  const stateTickets = (agingStaleOnly ? aging.stale : aging.sorted)
+    .filter((ticket) => !currentAgingStates.size || currentAgingStates.has(ticket.location));
+  const stale = sortAgingList(stateTickets.filter((ticket) => !currentAgingFailures.size || currentAgingFailures.has(agingFailureOf(ticket))));
   const workbook = XLSX.utils.book_new();
   const columns = agingColumns();
   const pivotSheet = XLSX.utils.aoa_to_sheet([
@@ -2047,8 +2111,26 @@ function exportBacklogAging() {
   ]);
   pivotSheet["!cols"] = [22, ...columns.map(() => 14), 10].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, pivotSheet, "Aging por estado");
+  // Aba "Por tipo de falha": tipo × faixa de aging das TSKs exportadas.
+  const failureCounts = new Map();
+  for (const ticket of stale) {
+    if (!failureCounts.has(agingFailureOf(ticket))) failureCounts.set(agingFailureOf(ticket), { ...Object.fromEntries(columns.map((label) => [label, 0])), semData: 0, total: 0 });
+    const counts = failureCounts.get(agingFailureOf(ticket));
+    if (columns.includes(ticket.aging)) counts[ticket.aging] += 1;
+    else counts.semData += 1;
+    counts.total += 1;
+  }
+  const failureRows = [...failureCounts].sort(([, left], [, right]) => right.total - left.total);
+  const failureSheet = XLSX.utils.aoa_to_sheet([
+    ["Tipo da falha", ...columns, "Sem data", "Total"],
+    ...failureRows.map(([failure, counts]) => [failure, ...columns.map((label) => counts[label]), counts.semData, counts.total]),
+    ["Total", ...columns.map((label) => failureRows.reduce((sum, [, counts]) => sum + counts[label], 0)),
+      failureRows.reduce((sum, [, counts]) => sum + counts.semData, 0), stale.length]
+  ]);
+  failureSheet["!cols"] = [30, ...columns.map(() => 14), 10, 10].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, failureSheet, "Por tipo de falha");
   const staleSheet = XLSX.utils.aoa_to_sheet([
-    ["TSK", "NE ID", "Estado", "Planilha", "Grupo", "Bucket", "CM", "Status", "Prioridade", "Criação do NTT", "Parada há", "Dias", "Aging"],
+    ["TSK", "NE ID", "Estado", "Planilha", "Grupo", "Bucket", "CM", "Tipo da falha", "Status", "Prioridade", "Criação do NTT", "Parada há", "Dias", "Aging"],
     ...stale.map((ticket) => [
       ticket.tsk,
       ticket.site,
@@ -2057,6 +2139,7 @@ function exportBacklogAging() {
       ticket.group === "technician" ? "Fila técnica" : "Centralizado",
       ticket.bucket,
       ticket.cm,
+      ticket.failureType,
       ticket.status,
       ticket.priority.toUpperCase(),
       ticket.createdAt,
@@ -2065,12 +2148,14 @@ function exportBacklogAging() {
       ticket.aging || "Sem data"
     ])
   ]);
-  staleSheet["!cols"] = [16, 18, 22, 14, 14, 40, 24, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
+  staleSheet["!cols"] = [16, 18, 22, 14, 14, 40, 24, 26, 14, 10, 20, 12, 8, 16].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, staleSheet, agingStaleOnly ? "Mais de 1 dia" : "Backlog");
   const groupSuffix = { all: "todas", tneOne: "tne-1", tneTwo: "tne-2" }[currentAgingGroup];
   const stateSuffix = currentAgingStates.size === 1 ? `-${normalizeText([...currentAgingStates][0]).replace(/\s+/g, "-")}`
     : currentAgingStates.size > 1 ? `-${currentAgingStates.size}-estados` : "";
-  const listSuffix = `${agingStaleOnly ? "-mais-de-1-dia" : ""}${currentAgingPriorities.size ? `-${BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).map((priority) => normalizeText(priority).replace(/\s+/g, "-")).join("-")}` : ""}`;
+  const failureSuffix = currentAgingFailures.size === 1 ? `-${normalizeText([...currentAgingFailures][0]).replace(/\s+/g, "-")}`
+    : currentAgingFailures.size > 1 ? `-${currentAgingFailures.size}-falhas` : "";
+  const listSuffix = `${failureSuffix}${agingStaleOnly ? "-mais-de-1-dia" : ""}${currentAgingPriorities.size ? `-${BACKLOG_PRIORITIES.filter((priority) => currentAgingPriorities.has(priority)).map((priority) => normalizeText(priority).replace(/\s+/g, "-")).join("-")}` : ""}`;
   XLSX.writeFile(workbook, `aging-backlog-${groupSuffix}${stateSuffix}${listSuffix}-${new Date().toISOString().slice(0, 10)}.xlsx`);
   showFeedback(`Aging exportado: ${stale.length.toLocaleString("pt-BR")} TSKs ${agingStaleOnly ? "paradas há mais de 1 dia" : "em backlog"}.`, "success");
 }
@@ -2253,6 +2338,7 @@ function clearAnalysis() {
   currentStateGroup = "all";
   currentAgingGroup = "all";
   currentAgingStates = new Set();
+  currentAgingFailures = new Set();
   agingStaleOnly = false;
   currentAgingPriorities = new Set();
   setView("completed");
@@ -2385,7 +2471,7 @@ for (const button of document.querySelectorAll("[data-aging-priority]")) {
   });
 }
 document.getElementById("aging-sort").addEventListener("change", (event) => {
-  currentAgingSort = event.target.value === "cm" ? "cm" : "days";
+  currentAgingSort = ["cm", "failure"].includes(event.target.value) ? event.target.value : "days";
   if (currentAnalysis) renderBacklogAging(currentAnalysis);
 });
 document.getElementById("aging-state-filter").addEventListener("change", (event) => {
@@ -2406,6 +2492,19 @@ function selectAgingState(state, additive) {
   renderBacklogAging(currentAnalysis);
   document.querySelector(`#aging-pivot-rows [data-aging-state="${CSS.escape(state)}"]`)?.focus({ preventScroll: true });
 }
+const agingFailureChips = document.getElementById("aging-failure-chips");
+agingFailureChips.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-aging-failure]");
+  if (!chip || Date.now() - agingContextToggleAt < 600) return;
+  selectAgingFailure(chip.dataset.agingFailure, event.ctrlKey || event.metaKey);
+});
+agingFailureChips.addEventListener("contextmenu", (event) => {
+  const chip = event.target.closest("[data-aging-failure]");
+  if (!chip || !event.ctrlKey) return;
+  event.preventDefault();
+  agingContextToggleAt = Date.now();
+  selectAgingFailure(chip.dataset.agingFailure, true);
+});
 const agingPivotRows = document.getElementById("aging-pivot-rows");
 agingPivotRows.addEventListener("click", (event) => {
   const row = event.target.closest("[data-aging-state]");
